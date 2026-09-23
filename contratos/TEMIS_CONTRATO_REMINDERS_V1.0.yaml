@@ -1,0 +1,458 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Recordatorios
+  description: |
+    API REST para gestión de recordatorios en TEMIS.
+
+    **Funcionalidades:**
+    - CRUD de recordatorios
+    - Asociación con tareas
+    - Notificaciones push y email
+    - Recordatorios recurrentes
+    - Gestión de estado (pendiente, enviado, cancelado)
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Reminders
+    description: Operaciones CRUD sobre recordatorios
+
+paths:
+  /reminders:
+    get:
+      tags:
+        - Reminders
+      summary: Listar recordatorios
+      operationId: listReminders
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: status
+          in: query
+          required: false
+          type: string
+          enum: [pending, sent, cancelled, failed]
+        - name: task_id
+          in: query
+          required: false
+          type: string
+          format: uuid
+          description: Filtrar por tarea asociada
+        - name: date_from
+          in: query
+          required: false
+          type: string
+          format: date-time
+        - name: date_to
+          in: query
+          required: false
+          type: string
+          format: date-time
+      responses:
+        200:
+          description: Lista de recordatorios
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  reminders:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Reminder'
+
+    post:
+      tags:
+        - Reminders
+      summary: Crear recordatorio
+      operationId: createReminder
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/ReminderCreateRequest'
+      responses:
+        201:
+          description: Recordatorio creado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  reminder:
+                    $ref: '#/definitions/Reminder'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /reminders/{reminderId}:
+    get:
+      tags:
+        - Reminders
+      summary: Obtener recordatorio por ID
+      operationId: getReminderById
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: reminderId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Recordatorio obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  reminder:
+                    $ref: '#/definitions/Reminder'
+        404:
+          description: Recordatorio no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Reminders
+      summary: Actualizar recordatorio
+      operationId: updateReminder
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: reminderId
+          in: path
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/ReminderUpdateRequest'
+      responses:
+        200:
+          description: Recordatorio actualizado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  reminder:
+                    $ref: '#/definitions/Reminder'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        404:
+          description: Recordatorio no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Reminders
+      summary: Eliminar recordatorio
+      operationId: deleteReminder
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: reminderId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Recordatorio eliminado
+        404:
+          description: Recordatorio no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /reminders/{reminderId}/cancel:
+    post:
+      tags:
+        - Reminders
+      summary: Cancelar recordatorio
+      description: Cancela un recordatorio pendiente
+      operationId: cancelReminder
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: reminderId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Recordatorio cancelado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  reminder:
+                    $ref: '#/definitions/Reminder'
+        404:
+          description: Recordatorio no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        409:
+          description: Recordatorio ya enviado o cancelado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Reminder:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      task_id:
+        type: string
+        format: uuid
+        description: "Tarea asociada (opcional)"
+      task_title:
+        type: string
+        example: "Completar informe"
+      remind_at:
+        type: string
+        format: date-time
+        example: "2026-07-15T09:00:00Z"
+      message:
+        type: string
+        example: "Recordatorio: Completar informe mensual"
+      notification_type:
+        type: string
+        enum: [push, email, both]
+        example: "push"
+      status:
+        type: string
+        enum: [pending, sent, cancelled, failed]
+        example: "pending"
+      is_recurring:
+        type: boolean
+        example: false
+      recurrence_pattern:
+        type: string
+        enum: [daily, weekly, monthly]
+      sent_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  ReminderCreateRequest:
+    type: object
+    required:
+      - remind_at
+      - notification_type
+    properties:
+      task_id:
+        type: string
+        format: uuid
+      remind_at:
+        type: string
+        format: date-time
+      message:
+        type: string
+        maxLength: 500
+      notification_type:
+        type: string
+        enum: [push, email, both]
+        default: push
+      is_recurring:
+        type: boolean
+        default: false
+      recurrence_pattern:
+        type: string
+        enum: [daily, weekly, monthly]
+
+  ReminderUpdateRequest:
+    type: object
+    required:
+      - remind_at
+      - notification_type
+    properties:
+      remind_at:
+        type: string
+        format: date-time
+      message:
+        type: string
+        maxLength: 500
+      notification_type:
+        type: string
+        enum: [push, email, both]
+      is_recurring:
+        type: boolean
+      recurrence_pattern:
+        type: string
+        enum: [daily, weekly, monthly]
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

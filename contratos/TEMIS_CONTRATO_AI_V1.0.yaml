@@ -1,0 +1,628 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Asistente IA
+  description: |
+    API REST para interacción con asistente de IA en TEMIS.
+
+    **Funcionalidades:**
+    - Chat conversacional con Claude 3.5 Sonnet
+    - Insights financieros automáticos
+    - Predicciones y recomendaciones
+    - Resúmenes de gastos e ingresos
+    - Análisis de productividad
+    - Sugerencias de ahorro
+
+    **Modelo:**
+    - Amazon Bedrock
+    - Claude 3.5 Sonnet v2 (anthropic.claude-3-5-sonnet-20241022-v2:0)
+
+    **Contexto de IA:**
+    - Acceso a datos del usuario (tareas, transacciones, presupuestos)
+    - Memoria de conversación
+    - Personalización según hábitos
+
+    **Limitaciones de cuota:**
+    - Free: 0 llamadas/mes
+    - Basic: 10-20 llamadas/mes
+    - Pro: 100 llamadas/mes
+    - Premium: 500 llamadas/mes
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Chat
+    description: Chat conversacional con IA
+  - name: Insights
+    description: Insights y análisis automáticos
+  - name: Predictions
+    description: Predicciones financieras
+
+paths:
+  /ai/chat:
+    post:
+      tags:
+        - Chat
+      summary: Enviar mensaje al asistente IA
+      description: |
+        Envía un mensaje al asistente y recibe una respuesta contextualizada.
+
+        **Ejemplos de preguntas:**
+        - "¿Cuánto gasté en restaurantes este mes?"
+        - "¿Cuáles son mis tareas pendientes urgentes?"
+        - "Dame un resumen de mis finanzas"
+        - "¿Estoy cumpliendo mis presupuestos?"
+      operationId: sendChatMessage
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/ChatRequest'
+      responses:
+        200:
+          description: Respuesta del asistente
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  conversation:
+                    $ref: '#/definitions/ChatResponse'
+        400:
+          description: Mensaje inválido
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        422:
+          description: Cuota de IA excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /ai/conversations:
+    get:
+      tags:
+        - Chat
+      summary: Listar conversaciones
+      description: Obtiene el historial de conversaciones del usuario
+      operationId: listConversations
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+      responses:
+        200:
+          description: Lista de conversaciones
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: '#/definitions/ConversationSummary'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+  /ai/conversations/{conversationId}:
+    get:
+      tags:
+        - Chat
+      summary: Obtener conversación completa
+      description: Recupera todos los mensajes de una conversación
+      operationId: getConversation
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: conversationId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Conversación obtenida
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  conversation:
+                    $ref: '#/definitions/Conversation'
+        404:
+          description: Conversación no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Chat
+      summary: Eliminar conversación
+      operationId: deleteConversation
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: conversationId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Conversación eliminada
+        404:
+          description: Conversación no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /ai/insights:
+    get:
+      tags:
+        - Insights
+      summary: Obtener insights financieros
+      description: |
+        Genera insights automáticos sobre las finanzas del usuario.
+
+        **Ejemplos de insights:**
+        - "Tus gastos en restaurantes aumentaron 30% este mes"
+        - "Estás gastando más de lo habitual los fines de semana"
+        - "Has completado el 80% de tus tareas este mes"
+        - "Estás cerca de exceder tu presupuesto de entretenimiento"
+      operationId: getInsights
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [week, month, quarter]
+          default: month
+      responses:
+        200:
+          description: Insights generados
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  insights:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Insight'
+        422:
+          description: Cuota de IA excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /ai/predictions:
+    get:
+      tags:
+        - Predictions
+      summary: Obtener predicciones financieras
+      description: |
+        Genera predicciones sobre gastos e ingresos futuros basándose en patrones históricos.
+
+        **Predicciones:**
+        - Gasto estimado próximo mes
+        - Categorías con mayor gasto proyectado
+        - Probabilidad de exceder presupuestos
+        - Proyección de balance
+      operationId: getPredictions
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Predicciones generadas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  predictions:
+                    $ref: '#/definitions/Predictions'
+        422:
+          description: Datos insuficientes o cuota excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /ai/summary:
+    get:
+      tags:
+        - Insights
+      summary: Obtener resumen inteligente
+      description: |
+        Genera un resumen narrativo del estado financiero y productividad del usuario.
+
+        **Incluye:**
+        - Resumen de gastos e ingresos
+        - Estado de tareas y proyectos
+        - Logros y alertas
+        - Recomendaciones
+      operationId: getSummary
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [week, month]
+          default: month
+      responses:
+        200:
+          description: Resumen generado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                    example: "Este mes has tenido un excelente control de gastos..."
+                  highlights:
+                    type: array
+                    items:
+                      type: string
+                    example: ["Completaste 45 tareas", "Ahorraste 15% vs mes anterior"]
+        422:
+          description: Cuota de IA excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Pagination:
+    type: object
+    properties:
+      totalElement:
+        type: integer
+      pageSize:
+        type: integer
+      pageNumber:
+        type: integer
+      hasMoreElements:
+        type: boolean
+
+  ChatRequest:
+    type: object
+    required:
+      - message
+    properties:
+      message:
+        type: string
+        minLength: 1
+        maxLength: 2000
+        example: "¿Cuánto gasté en restaurantes este mes?"
+      conversation_id:
+        type: string
+        format: uuid
+        description: "ID de conversación existente (opcional para nueva)"
+
+  ChatResponse:
+    type: object
+    properties:
+      conversation_id:
+        type: string
+        format: uuid
+      user_message:
+        type: string
+        example: "¿Cuánto gasté en restaurantes este mes?"
+      assistant_message:
+        type: string
+        example: "Este mes has gastado $450,000 COP en restaurantes..."
+      tokens_used:
+        type: object
+        properties:
+          input:
+            type: integer
+            example: 250
+          output:
+            type: integer
+            example: 180
+      processing_time_ms:
+        type: integer
+        example: 1850
+      created_at:
+        type: string
+        format: date-time
+
+  ConversationSummary:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      title:
+        type: string
+        example: "Consulta sobre gastos en restaurantes"
+        description: "Generado automáticamente del primer mensaje"
+      message_count:
+        type: integer
+        example: 5
+      last_message_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+
+  Conversation:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      title:
+        type: string
+      messages:
+        type: array
+        items:
+          type: object
+          properties:
+            role:
+              type: string
+              enum: [user, assistant]
+            content:
+              type: string
+            created_at:
+              type: string
+              format: date-time
+      created_at:
+        type: string
+        format: date-time
+
+  Insight:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      type:
+        type: string
+        enum: [expense_trend, budget_alert, productivity, savings_opportunity, spending_pattern]
+        example: "expense_trend"
+      title:
+        type: string
+        example: "Aumento en gastos de restaurantes"
+      description:
+        type: string
+        example: "Tus gastos en restaurantes aumentaron 30% este mes comparado con el anterior"
+      severity:
+        type: string
+        enum: [info, warning, critical]
+        example: "warning"
+      data:
+        type: object
+        description: "Datos estructurados del insight"
+      created_at:
+        type: string
+        format: date-time
+
+  Predictions:
+    type: object
+    properties:
+      next_month_expense:
+        type: object
+        properties:
+          amount:
+            type: number
+            format: float
+            example: 3200000.00
+          currency:
+            type: string
+            example: "COP"
+          confidence:
+            type: number
+            format: float
+            example: 0.85
+            description: "Confianza de la predicción (0-1)"
+      top_categories:
+        type: array
+        items:
+          type: object
+          properties:
+            category_name:
+              type: string
+              example: "Restaurantes"
+            predicted_amount:
+              type: number
+              format: float
+            percentage_of_total:
+              type: number
+              format: float
+      budget_alerts:
+        type: array
+        items:
+          type: object
+          properties:
+            budget_name:
+              type: string
+            probability_exceed:
+              type: number
+              format: float
+              example: 0.75
+              description: "Probabilidad de exceder (0-1)"
+      projected_balance:
+        type: object
+        properties:
+          end_of_month:
+            type: number
+            format: float
+          trend:
+            type: string
+            enum: [increasing, decreasing, stable]
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

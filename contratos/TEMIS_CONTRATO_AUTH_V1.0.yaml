@@ -1,0 +1,1101 @@
+swagger: '2.0'
+info:
+  title: API TEMIS - Autenticación
+  description: |
+    API de autenticación para TEMIS - Gestión de usuarios, login, registro y tokens JWT.
+
+    **Características**:
+    - Autenticación JWT con RS256
+    - Refresh tokens para renovación de sesión
+    - Recuperación de contraseña
+    - Sin AWS Cognito (JWT propio)
+    - Rate limiting para prevenir ataques de fuerza bruta
+
+    **Rate Limiting**:
+    - POST /auth/login: 5 intentos fallidos por IP en 15 minutos (bloqueo 15 min)
+    - POST /auth/register: 3 registros por IP en 1 hora
+    - POST /auth/forgot-password: 3 intentos por email en 1 hora
+    - POST /auth/refresh: 10 intentos por minuto
+    - POST /auth/revoke-all-sessions: 5 intentos por hora
+
+    **Headers de Rate Limit (en todas las respuestas)**:
+    - X-RateLimit-Limit: Límite máximo de requests
+    - X-RateLimit-Remaining: Requests restantes
+    - X-RateLimit-Reset: Timestamp UNIX cuando se resetea el límite
+
+    **Respuesta 429 (Too Many Requests)**:
+    ```json
+    {
+      "headers": {
+        "httpStatusCode": 429,
+        "httpStatusDesc": "Too Many Requests"
+      },
+      "messageResponse": {
+        "responseCode": "0429",
+        "responseMessage": "Rate limit exceeded",
+        "responseDetail": "You have exceeded the rate limit. Please try again in 15 minutes."
+      },
+      "data": {
+        "retryAfterSeconds": 900,
+        "limit": 5,
+        "window": "15 minutes"
+      }
+    }
+    ```
+  version: 1.0.0
+  contact:
+    name: Equipo TEMIS
+    email: dev@temis.app
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+produces:
+  - application/json
+consumes:
+  - application/json
+
+tags:
+  - name: auth
+    description: Operaciones de autenticación y gestión de sesiones
+
+paths:
+
+  # =========================
+  # REGISTRO
+  # =========================
+
+  /auth/register:
+    post:
+      tags:
+        - auth
+      summary: Registrar nuevo usuario
+      description: |
+        Crea una nueva cuenta de usuario en TEMIS.
+        - Crea automáticamente una organización personal
+        - Asigna plan Free por defecto con trial de 14 días
+        - Genera tokens JWT (access + refresh)
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador de trazabilidad (UUID)
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador de la aplicación consumidora
+
+        - in: body
+          name: registerRequest
+          required: true
+          schema:
+            $ref: '#/definitions/registerRequest'
+
+      responses:
+        '201':
+          description: Usuario registrado exitosamente
+          schema:
+            $ref: '#/definitions/registerResponse'
+        '400':
+          description: Datos inválidos o mal formateados
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '409':
+          description: Email ya registrado
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno del servidor
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # LOGIN
+  # =========================
+
+  /auth/login:
+    post:
+      tags:
+        - auth
+      summary: Iniciar sesión
+      description: |
+        Autentica un usuario y retorna tokens JWT.
+        - Valida email y password
+        - Actualiza last_login_at
+        - Genera nuevo refresh token
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: loginRequest
+          required: true
+          schema:
+            $ref: '#/definitions/loginRequest'
+
+      responses:
+        '200':
+          description: Login exitoso
+          schema:
+            $ref: '#/definitions/loginResponse'
+        '400':
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '401':
+          description: Credenciales incorrectas
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '403':
+          description: Usuario inactivo o bloqueado
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # REFRESH TOKEN
+  # =========================
+
+  /auth/refresh:
+    post:
+      tags:
+        - auth
+      summary: Renovar access token
+      description: |
+        Renueva el access token usando un refresh token válido.
+        - Valida refresh token
+        - Verifica que no esté revocado
+        - Genera nuevo access token
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: refreshRequest
+          required: true
+          schema:
+            $ref: '#/definitions/refreshRequest'
+
+      responses:
+        '200':
+          description: Token renovado
+          schema:
+            $ref: '#/definitions/refreshResponse'
+        '400':
+          description: Token inválido
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '401':
+          description: Token expirado o revocado
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # LOGOUT
+  # =========================
+
+  /auth/logout:
+    post:
+      tags:
+        - auth
+      summary: Cerrar sesión
+      description: |
+        Invalida el refresh token del usuario.
+        - Revoca refresh token
+        - Registra en audit_logs
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          type: string
+          description: Bearer JWT Token
+
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: logoutRequest
+          required: true
+          schema:
+            $ref: '#/definitions/logoutRequest'
+
+      responses:
+        '204':
+          description: Sesión cerrada exitosamente
+        '401':
+          description: Token inválido
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # FORGOT PASSWORD
+  # =========================
+
+  /auth/forgot-password:
+    post:
+      tags:
+        - auth
+      summary: Solicitar recuperación de contraseña
+      description: |
+        Envía email con link de recuperación de contraseña.
+        - Genera token temporal de reset
+        - Envía email con SES
+        - Token válido por 1 hora
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: forgotPasswordRequest
+          required: true
+          schema:
+            $ref: '#/definitions/forgotPasswordRequest'
+
+      responses:
+        '200':
+          description: Email enviado (siempre retorna 200 por seguridad)
+          schema:
+            $ref: '#/definitions/forgotPasswordResponse'
+        '400':
+          description: Email inválido
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '429':
+          description: Demasiados intentos
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # RESET PASSWORD
+  # =========================
+
+  /auth/reset-password:
+    post:
+      tags:
+        - auth
+      summary: Restablecer contraseña
+      description: |
+        Restablece la contraseña usando el token recibido por email.
+        - Valida token de reset
+        - Actualiza password
+        - Revoca todos los refresh tokens existentes
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: resetPasswordRequest
+          required: true
+          schema:
+            $ref: '#/definitions/resetPasswordRequest'
+
+      responses:
+        '200':
+          description: Contraseña actualizada
+          schema:
+            $ref: '#/definitions/resetPasswordResponse'
+        '400':
+          description: Token inválido o password débil
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '401':
+          description: Token expirado
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # VERIFY EMAIL
+  # =========================
+
+  /auth/verify-email:
+    post:
+      tags:
+        - auth
+      summary: Verificar email del usuario
+      description: |
+        Verifica el email del usuario usando token enviado por correo.
+        - Valida token de verificación
+        - Marca email como verificado
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: verifyEmailRequest
+          required: true
+          schema:
+            $ref: '#/definitions/verifyEmailRequest'
+
+      responses:
+        '200':
+          description: Email verificado
+          schema:
+            $ref: '#/definitions/verifyEmailResponse'
+        '400':
+          description: Token inválido
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '401':
+          description: Token expirado
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # REVOKE ALL SESSIONS
+  # =========================
+
+  /auth/revoke-all-sessions:
+    post:
+      tags:
+        - auth
+      summary: Revocar todas las sesiones activas del usuario
+      description: |
+        Invalida TODOS los refresh tokens del usuario autenticado.
+
+        **Casos de uso:**
+        - Usuario perdió su dispositivo móvil
+        - Sospecha de acceso no autorizado
+        - Después de cambio de contraseña
+        - Cierre de sesión en todos los dispositivos
+
+        **Proceso:**
+        1. Marca todos los refresh_tokens como revoked=true
+        2. Registra evento en audit_logs
+        3. Usuario debe hacer login nuevamente en todos dispositivos
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          type: string
+          description: Bearer JWT Token
+
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: revokeAllSessionsRequest
+          required: false
+          schema:
+            $ref: '#/definitions/revokeAllSessionsRequest'
+
+      responses:
+        '200':
+          description: Todas las sesiones revocadas exitosamente
+          schema:
+            $ref: '#/definitions/revokeAllSessionsResponse'
+        '401':
+          description: Token JWT inválido o expirado
+          schema:
+            $ref: '#/definitions/errorResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+  # =========================
+  # VERIFY TOKEN
+  # =========================
+
+  /auth/verify:
+    post:
+      tags:
+        - auth
+      summary: Verificar validez de un access token
+      description: |
+        Endpoint para validar access tokens JWT.
+        Usado internamente por otras lambdas para validar autenticación.
+
+        **Uso interno:**
+        - lambda-tasks llama a lambda-auth para validar token
+        - Evita duplicar lógica de validación JWT en cada lambda
+        - Retorna información del usuario si token es válido
+
+        **Performance:**
+        - Resultado puede ser cacheado por 30 segundos
+        - Validación rápida (<50ms)
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - in: body
+          name: verifyTokenRequest
+          required: true
+          schema:
+            $ref: '#/definitions/verifyTokenRequest'
+
+      responses:
+        '200':
+          description: Token válido
+          schema:
+            $ref: '#/definitions/verifyTokenResponse'
+        '401':
+          description: Token inválido o expirado
+          schema:
+            $ref: '#/definitions/verifyTokenInvalidResponse'
+        '500':
+          description: Error interno
+          schema:
+            $ref: '#/definitions/errorResponse'
+
+# =========================
+# DEFINITIONS
+# =========================
+
+definitions:
+
+  # -------------------
+  # REQUEST MODELS
+  # -------------------
+
+  registerRequest:
+    type: object
+    required:
+      - name
+      - email
+      - password
+    properties:
+      name:
+        type: string
+        minLength: 2
+        maxLength: 255
+        example: "Juan Pérez"
+        description: Nombre completo del usuario
+      email:
+        type: string
+        format: email
+        maxLength: 255
+        example: "juan@example.com"
+        description: Email (debe ser único)
+      password:
+        type: string
+        minLength: 8
+        maxLength: 255
+        example: "SecurePass123!"
+        description: |
+          Contraseña segura.
+          Requisitos: mínimo 8 caracteres, al menos 1 mayúscula, 1 minúscula, 1 número
+      timezone:
+        type: string
+        example: "America/Mexico_City"
+        description: Zona horaria del usuario
+      locale:
+        type: string
+        example: "es_ES"
+        description: Idioma/locación
+
+  loginRequest:
+    type: object
+    required:
+      - email
+      - password
+    properties:
+      email:
+        type: string
+        format: email
+        example: "juan@example.com"
+      password:
+        type: string
+        example: "SecurePass123!"
+      deviceId:
+        type: string
+        example: "device_abc123"
+        description: Identificador único del dispositivo
+      deviceName:
+        type: string
+        example: "iPhone 13"
+        description: Nombre del dispositivo
+
+  refreshRequest:
+    type: object
+    required:
+      - refreshToken
+    properties:
+      refreshToken:
+        type: string
+        example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+        description: Refresh token JWT
+
+  logoutRequest:
+    type: object
+    required:
+      - refreshToken
+    properties:
+      refreshToken:
+        type: string
+        example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+  forgotPasswordRequest:
+    type: object
+    required:
+      - email
+    properties:
+      email:
+        type: string
+        format: email
+        example: "juan@example.com"
+
+  resetPasswordRequest:
+    type: object
+    required:
+      - token
+      - newPassword
+    properties:
+      token:
+        type: string
+        example: "reset_token_abc123"
+        description: Token de reset recibido por email
+      newPassword:
+        type: string
+        minLength: 8
+        example: "NewSecurePass456!"
+
+  verifyEmailRequest:
+    type: object
+    required:
+      - token
+    properties:
+      token:
+        type: string
+        example: "verify_token_xyz789"
+
+  revokeAllSessionsRequest:
+    type: object
+    properties:
+      reason:
+        type: string
+        maxLength: 500
+        example: "Dispositivo perdido"
+        description: Razón opcional para revocar sesiones
+
+  verifyTokenRequest:
+    type: object
+    required:
+      - accessToken
+    properties:
+      accessToken:
+        type: string
+        example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+        description: Access token JWT a validar
+
+  # -------------------
+  # RESPONSE MODELS
+  # -------------------
+
+  registerResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders201'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          user:
+            $ref: '#/definitions/user'
+          tokens:
+            $ref: '#/definitions/tokens'
+
+  loginResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          user:
+            $ref: '#/definitions/user'
+          tokens:
+            $ref: '#/definitions/tokens'
+
+  refreshResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          accessToken:
+            type: string
+            example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          expiresIn:
+            type: integer
+            example: 900
+            description: Segundos hasta expiración (15 minutos)
+
+  forgotPasswordResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          message:
+            type: string
+            example: "Si el email existe, recibirás un correo con instrucciones"
+          emailSent:
+            type: boolean
+            example: true
+
+  resetPasswordResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          message:
+            type: string
+            example: "Contraseña actualizada exitosamente"
+          passwordChanged:
+            type: boolean
+            example: true
+
+  verifyEmailResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          message:
+            type: string
+            example: "Email verificado exitosamente"
+          emailVerified:
+            type: boolean
+            example: true
+
+  revokeAllSessionsResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          message:
+            type: string
+            example: "Todas las sesiones han sido revocadas"
+          sessionsRevoked:
+            type: integer
+            example: 3
+            description: Número de sesiones activas que fueron revocadas
+          devicesAffected:
+            type: array
+            items:
+              type: object
+              properties:
+                deviceName:
+                  type: string
+                  example: "iPhone 13"
+                lastUsedAt:
+                  type: string
+                  format: date-time
+
+  verifyTokenResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          valid:
+            type: boolean
+            example: true
+          userId:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+          organizationId:
+            type: string
+            format: uuid
+            example: "660e8400-e29b-41d4-a716-446655440000"
+          email:
+            type: string
+            format: email
+            example: "juan@example.com"
+          role:
+            type: string
+            enum: [user, admin, superadmin]
+            example: "user"
+          expiresAt:
+            type: string
+            format: date-time
+            example: "2026-07-12T10:45:00Z"
+            description: Timestamp de expiración del token
+
+  verifyTokenInvalidResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/responseHeaders200'
+      messageResponse:
+        $ref: '#/definitions/messageResponse'
+      data:
+        type: object
+        properties:
+          valid:
+            type: boolean
+            example: false
+          error:
+            type: string
+            example: "Token expired"
+          errorCode:
+            type: string
+            example: "TOKEN_EXPIRED"
+
+  # -------------------
+  # DOMAIN MODELS
+  # -------------------
+
+  user:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      organizationId:
+        type: string
+        format: uuid
+        example: "660e8400-e29b-41d4-a716-446655440000"
+      name:
+        type: string
+        example: "Juan Pérez"
+      email:
+        type: string
+        format: email
+        example: "juan@example.com"
+      avatarUrl:
+        type: string
+        example: "https://s3.amazonaws.com/temis/avatars/user_123.jpg"
+      phone:
+        type: string
+        example: "+52 555 1234"
+      role:
+        type: string
+        enum: [user, admin, superadmin]
+        example: "user"
+      isActive:
+        type: boolean
+        example: true
+      isEmailVerified:
+        type: boolean
+        example: false
+      subscription:
+        type: object
+        properties:
+          planName:
+            type: string
+            example: "Pro"
+          status:
+            type: string
+            enum: [trial, active, past_due, cancelled, expired, suspended]
+            example: "trial"
+          trialEndsAt:
+            type: string
+            format: date-time
+            example: "2026-07-26T10:00:00Z"
+      preferences:
+        type: object
+        properties:
+          locale:
+            type: string
+            example: "es_ES"
+          timezone:
+            type: string
+            example: "America/Mexico_City"
+          currency:
+            type: string
+            example: "USD"
+      createdAt:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:00:00Z"
+
+  tokens:
+    type: object
+    properties:
+      accessToken:
+        type: string
+        example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+        description: JWT access token (RS256, expira en 15 minutos)
+      refreshToken:
+        type: string
+        example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+        description: JWT refresh token (expira en 7 días)
+      expiresIn:
+        type: integer
+        example: 900
+        description: Segundos hasta expiración del access token
+      tokenType:
+        type: string
+        example: "Bearer"
+
+  # -------------------
+  # STANDARD HEADERS
+  # -------------------
+
+  responseHeaders200:
+    type: object
+    required:
+      - httpStatusCode
+      - httpStatusDesc
+      - messageUuid
+      - requestDatetime
+      - requestAppId
+    properties:
+      httpStatusCode:
+        type: integer
+        example: 200
+      httpStatusDesc:
+        type: string
+        example: "OK"
+      messageUuid:
+        type: string
+        format: uuid
+        example: "c4e6bd04-5149-11e7-b114-a2f933d5fe66"
+      requestDatetime:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:30:00Z"
+      requestAppId:
+        type: string
+        format: uuid
+        example: "acxff62e-6f12-42de-9012-1e7304418abd"
+
+  responseHeaders201:
+    type: object
+    required:
+      - httpStatusCode
+      - httpStatusDesc
+      - messageUuid
+      - requestDatetime
+      - requestAppId
+    properties:
+      httpStatusCode:
+        type: integer
+        example: 201
+      httpStatusDesc:
+        type: string
+        example: "CREATED"
+      messageUuid:
+        type: string
+        format: uuid
+        example: "c4e6bd04-5149-11e7-b114-a2f933d5fe66"
+      requestDatetime:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:30:00Z"
+      requestAppId:
+        type: string
+        format: uuid
+        example: "acxff62e-6f12-42de-9012-1e7304418abd"
+
+  messageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+        example: "0000"
+        description: "0000 = Success, otros códigos = error específico"
+      responseMessage:
+        type: string
+        example: "Success"
+      responseDetails:
+        type: string
+        example: "Operation completed successfully"
+
+  # -------------------
+  # ERROR RESPONSES
+  # -------------------
+
+  errorResponse:
+    type: object
+    properties:
+      headers:
+        type: object
+        properties:
+          httpStatusCode:
+            type: integer
+            example: 400
+          httpStatusDesc:
+            type: string
+            example: "BAD_REQUEST"
+          messageUuid:
+            type: string
+            format: uuid
+          requestDatetime:
+            type: string
+            format: date-time
+          requestAppId:
+            type: string
+            format: uuid
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+            example: "0400"
+          responseMessage:
+            type: string
+            example: "Bad Request"
+          responseDetail:
+            type: string
+            example: "Validation error"
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+              example: "EMAIL_ALREADY_EXISTS"
+            errorDetail:
+              type: string
+              example: "El email ya está registrado"
+
+# =========================
+# SECURITY
+# =========================
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: |
+      JWT Bearer Token.
+      Format: Authorization: Bearer {token}
+
+# Endpoints que NO requieren autenticación:
+# - /auth/register
+# - /auth/login
+# - /auth/refresh
+# - /auth/forgot-password
+# - /auth/reset-password
+# - /auth/verify-email
+
+# /auth/logout SÍ requiere autenticación

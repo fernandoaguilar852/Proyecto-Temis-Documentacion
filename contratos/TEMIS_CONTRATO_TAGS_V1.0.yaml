@@ -1,0 +1,384 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Etiquetas
+  description: |
+    API REST para gestión de etiquetas (tags) en TEMIS.
+
+    Las etiquetas son elementos transversales que se pueden asociar a:
+    - Tareas
+    - Transacciones financieras
+    - Contraseñas
+
+    **Funcionalidades:**
+    - CRUD completo de etiquetas
+    - Colores personalizables
+    - Búsqueda y filtrado
+    - Conteo de uso por etiqueta
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Tags
+    description: Operaciones CRUD sobre etiquetas
+
+paths:
+  /tags:
+    get:
+      tags:
+        - Tags
+      summary: Listar etiquetas del usuario
+      operationId: listTags
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: search
+          in: query
+          required: false
+          type: string
+          description: Buscar por nombre
+        - name: sortBy
+          in: query
+          required: false
+          type: string
+          enum: [name, usage_count, created_at]
+          default: name
+        - name: sortOrder
+          in: query
+          required: false
+          type: string
+          enum: [asc, desc]
+          default: asc
+      responses:
+        200:
+          description: Lista de etiquetas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  tags:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Tag'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    post:
+      tags:
+        - Tags
+      summary: Crear nueva etiqueta
+      operationId: createTag
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TagCreateRequest'
+      responses:
+        201:
+          description: Etiqueta creada
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  tag:
+                    $ref: '#/definitions/Tag'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        409:
+          description: Etiqueta ya existe
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /tags/{tagId}:
+    get:
+      tags:
+        - Tags
+      summary: Obtener etiqueta por ID
+      operationId: getTagById
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: tagId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Etiqueta obtenida
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  tag:
+                    $ref: '#/definitions/Tag'
+        404:
+          description: Etiqueta no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Tags
+      summary: Actualizar etiqueta
+      operationId: updateTag
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: tagId
+          in: path
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TagUpdateRequest'
+      responses:
+        200:
+          description: Etiqueta actualizada
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  tag:
+                    $ref: '#/definitions/Tag'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        404:
+          description: Etiqueta no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Tags
+      summary: Eliminar etiqueta
+      description: |
+        Elimina una etiqueta. Las asociaciones existentes se mantienen pero la etiqueta no estará disponible para nuevas asociaciones.
+      operationId: deleteTag
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: tagId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Etiqueta eliminada
+        404:
+          description: Etiqueta no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Tag:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      name:
+        type: string
+        example: "Urgente"
+      color:
+        type: string
+        example: "#EF4444"
+        description: "Color en formato hex"
+      usage_count:
+        type: integer
+        example: 15
+        description: "Número de veces que se usa"
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  TagCreateRequest:
+    type: object
+    required:
+      - name
+      - color
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 50
+        example: "Urgente"
+      color:
+        type: string
+        pattern: '^#[0-9A-Fa-f]{6}$'
+        example: "#EF4444"
+
+  TagUpdateRequest:
+    type: object
+    required:
+      - name
+      - color
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 50
+      color:
+        type: string
+        pattern: '^#[0-9A-Fa-f]{6}$'
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

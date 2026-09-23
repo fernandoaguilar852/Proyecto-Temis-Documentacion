@@ -1,0 +1,1443 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Gestión de Tareas
+  description: |
+    API REST para gestión de tareas en la plataforma TEMIS.
+
+    **Funcionalidades principales:**
+    - Crear, leer, actualizar y eliminar tareas
+    - Marcar tareas como completadas/pendientes
+    - Organizar con etiquetas y categorías
+    - Prioridades y fechas de vencimiento
+    - Estadísticas y reportes
+    - Integración con entrada por voz
+    - Asociación de recordatorios
+
+    **Autenticación:** Bearer JWT Token (RS256)
+  version: 1.0.0
+  contact:
+    name: Equipo TEMIS
+    email: soporte@temis.app
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: 'Token JWT en formato: Bearer {token}'
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Tareas
+    description: Operaciones CRUD sobre tareas
+  - name: Estadísticas
+    description: Reportes y estadísticas de tareas
+  - name: Voice
+    description: Integración con entrada por voz
+
+paths:
+  /tasks:
+    get:
+      tags:
+        - Tareas
+      summary: Listar tareas del usuario
+      description: |
+        Obtiene todas las tareas del usuario autenticado con filtros opcionales y paginación.
+
+        **Filtros disponibles:**
+        - Estado (pending, completed, archived)
+        - Prioridad (low, medium, high, urgent)
+        - Fecha de vencimiento
+        - Categoría
+        - Etiquetas
+        - Búsqueda por título/descripción
+      operationId: listTasks
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador único de trazabilidad del request
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador de la aplicación consumidora
+
+        - name: X-Device-ID
+          in: header
+          required: false
+          type: string
+          description: Identificador único del dispositivo
+
+        - name: status
+          in: query
+          required: false
+          type: string
+          enum: [pending, completed, archived]
+          description: Filtrar por estado de la tarea
+
+        - name: priority
+          in: query
+          required: false
+          type: string
+          enum: [low, medium, high, urgent]
+          description: Filtrar por prioridad
+
+        - name: category_id
+          in: query
+          required: false
+          type: string
+          format: uuid
+          description: Filtrar por categoría
+
+        - name: tag_ids
+          in: query
+          required: false
+          type: array
+          items:
+            type: string
+            format: uuid
+          collectionFormat: csv
+          description: Filtrar por etiquetas (comma-separated UUIDs)
+
+        - name: due_date_from
+          in: query
+          required: false
+          type: string
+          format: date
+          description: Fecha de vencimiento desde (YYYY-MM-DD)
+
+        - name: due_date_to
+          in: query
+          required: false
+          type: string
+          format: date
+          description: Fecha de vencimiento hasta (YYYY-MM-DD)
+
+        - name: search
+          in: query
+          required: false
+          type: string
+          description: Buscar en título y descripción
+
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: Tamaño de página
+
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+          minimum: 1
+          description: Número de página
+
+        - name: sortBy
+          in: query
+          required: false
+          type: string
+          enum: [created_at, due_date, priority, title]
+          default: created_at
+          description: Campo por el cual ordenar
+
+        - name: sortOrder
+          in: query
+          required: false
+          type: string
+          enum: [asc, desc]
+          default: desc
+          description: Orden de clasificación
+
+      responses:
+        200:
+          description: Lista de tareas obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+              - pagination
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Task'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+        400:
+          description: Parámetros de búsqueda inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: Token JWT inválido o expirado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno del servidor
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    post:
+      tags:
+        - Tareas
+      summary: Crear nueva tarea
+      description: Crea una nueva tarea para el usuario autenticado
+      operationId: createTask
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador único de trazabilidad
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador de la aplicación
+
+        - name: X-Device-ID
+          in: header
+          required: false
+          type: string
+          description: Identificador del dispositivo
+
+        - name: body
+          in: body
+          required: true
+          description: Datos de la tarea a crear
+          schema:
+            $ref: '#/definitions/TaskCreateRequest'
+
+      responses:
+        201:
+          description: Tarea creada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+
+        400:
+          description: Datos de entrada inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Límite de tareas alcanzado según plan de suscripción
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno del servidor
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /tasks/{taskId}:
+    get:
+      tags:
+        - Tareas
+      summary: Obtener tarea por ID
+      description: Obtiene los detalles completos de una tarea específica
+      operationId: getTaskById
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID único de la tarea
+
+      responses:
+        200:
+          description: Tarea obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos para acceder a esta tarea
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Tareas
+      summary: Actualizar tarea completa
+      description: Actualiza todos los campos de una tarea existente
+      operationId: updateTask
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID de la tarea
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TaskUpdateRequest'
+
+      responses:
+        200:
+          description: Tarea actualizada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida (ej. suscripción expirada)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    patch:
+      tags:
+        - Tareas
+      summary: Actualizar campos específicos
+      description: Actualiza solo los campos proporcionados de una tarea
+      operationId: patchTask
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TaskPatchRequest'
+
+      responses:
+        200:
+          description: Tarea actualizada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Tareas
+      summary: Eliminar tarea
+      description: Elimina permanentemente una tarea (soft delete)
+      operationId: deleteTask
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        204:
+          description: Tarea eliminada exitosamente
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida (suscripción expirada)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /tasks/{taskId}/complete:
+    post:
+      tags:
+        - Tareas
+      summary: Marcar tarea como completada
+      description: Cambia el estado de la tarea a completada con timestamp
+      operationId: completeTask
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Tarea marcada como completada
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        409:
+          description: La tarea ya está completada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /tasks/{taskId}/uncomplete:
+    post:
+      tags:
+        - Tareas
+      summary: Marcar tarea como pendiente
+      description: Cambia el estado de la tarea a pendiente
+      operationId: uncompleteTask
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Tarea marcada como pendiente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        409:
+          description: La tarea ya está pendiente
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /tasks/stats:
+    get:
+      tags:
+        - Estadísticas
+      summary: Obtener estadísticas de tareas
+      description: |
+        Obtiene estadísticas y métricas del usuario sobre sus tareas:
+        - Total de tareas por estado
+        - Tareas por prioridad
+        - Tareas completadas por período
+        - Tasa de completitud
+        - Tareas vencidas
+        - Promedio de tiempo de completitud
+      operationId: getTaskStats
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [week, month, quarter, year, all]
+          default: month
+          description: Período de tiempo para las estadísticas
+
+        - name: category_id
+          in: query
+          required: false
+          type: string
+          format: uuid
+          description: Filtrar por categoría específica
+
+      responses:
+        200:
+          description: Estadísticas obtenidas exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  stats:
+                    $ref: '#/definitions/TaskStats'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  # =========================
+  # SUBTAREAS
+  # =========================
+
+  /tasks/{taskId}/subtasks:
+    get:
+      tags:
+        - Tareas
+      summary: Listar subtareas de una tarea padre
+      description: |
+        Obtiene todas las subtareas (hijos) de una tarea padre.
+
+        **Jerarquía:**
+        - Solo 1 nivel de profundidad soportado (padre → hijo)
+        - NO se permiten sub-subtareas (nietos)
+        - Útil para dividir tareas grandes en pasos más pequeños
+
+        **Ejemplo de uso:**
+        - Tarea padre: "Organizar evento corporativo"
+        - Subtareas: "Reservar lugar", "Enviar invitaciones", "Contratar catering"
+
+        **Filtros opcionales:**
+        - `status`: Filtrar por estado (pending, completed, archived)
+        - Solo retorna subtareas que pertenecen al usuario autenticado (RLS)
+      operationId: getSubtasks
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID de la tarea padre
+
+        - name: status
+          in: query
+          required: false
+          type: string
+          enum: [pending, completed, archived]
+          description: Filtrar subtareas por estado
+
+      responses:
+        200:
+          description: Subtareas obtenidas exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  parentTask:
+                    type: object
+                    description: Información resumida de la tarea padre
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      title:
+                        type: string
+                        example: "Organizar evento corporativo"
+                      status:
+                        type: string
+                        enum: [pending, completed, archived]
+                  subtasks:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Task'
+                  summary:
+                    type: object
+                    description: Resumen de subtareas
+                    properties:
+                      total:
+                        type: integer
+                        example: 5
+                      completed:
+                        type: integer
+                        example: 3
+                      pending:
+                        type: integer
+                        example: 2
+                      completionPercentage:
+                        type: number
+                        format: float
+                        example: 60.0
+                        description: Porcentaje de subtareas completadas
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos para acceder a esta tarea
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea padre no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    post:
+      tags:
+        - Tareas
+      summary: Crear nueva subtarea
+      description: |
+        Crea una nueva subtarea bajo una tarea padre existente.
+
+        **Validaciones:**
+        - La tarea padre NO puede ser ella misma una subtarea (no sub-subtareas)
+        - Máximo 50 subtareas por tarea padre
+        - La subtarea hereda organization_id y user_id del padre (automático)
+        - Validación de cuota según plan de suscripción
+
+        **Auto-completado de tarea padre:**
+        - Cuando TODAS las subtareas están completed, se puede auto-completar la padre
+        - Esto es opcional y se controla desde el frontend
+
+        **Error 400 si:**
+        - parent_task_id apunta a una tarea que ya es subtarea (no nietos)
+        - Límite de 50 subtareas alcanzado
+      operationId: createSubtask
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: taskId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID de la tarea padre
+
+        - name: body
+          in: body
+          required: true
+          description: Datos de la subtarea (usa misma estructura que TaskCreateRequest)
+          schema:
+            $ref: '#/definitions/TaskCreateRequest'
+
+      responses:
+        201:
+          description: Subtarea creada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  subtask:
+                    $ref: '#/definitions/Task'
+                    description: La subtarea creada (incluye parent_task_id)
+
+        400:
+          description: Tarea padre es una subtarea o límite de 50 subtareas alcanzado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos para crear subtareas en esta tarea
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Tarea padre no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Límite de tareas total alcanzado según plan o suscripción expirada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    required:
+      - httpStatusCode
+      - httpStatusDesc
+      - messageUuid
+      - requestDatetime
+      - requestAppId
+    properties:
+      httpStatusCode:
+        type: integer
+        example: 200
+      httpStatusDesc:
+        type: string
+        example: "OK"
+      messageUuid:
+        type: string
+        format: uuid
+        example: "c4e6bd04-5149-11e7-b114-a2f933d5fe66"
+      requestDatetime:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:30:00Z"
+      requestAppId:
+        type: string
+        format: uuid
+        example: "acxff62e-6f12-42de-9012-1e7304418abd"
+
+  MessageResponse:
+    type: object
+    required:
+      - responseCode
+      - responseMessage
+    properties:
+      responseCode:
+        type: string
+        example: "0000"
+        description: "0000 = Success, otros códigos indican errores"
+      responseMessage:
+        type: string
+        example: "Success"
+      responseDetail:
+        type: string
+        example: "Operation completed successfully"
+
+  Pagination:
+    type: object
+    required:
+      - totalElement
+      - pageSize
+      - pageNumber
+      - hasMoreElements
+    properties:
+      totalElement:
+        type: integer
+        example: 150
+        description: Total de elementos disponibles
+      pageSize:
+        type: integer
+        example: 20
+        description: Cantidad de elementos por página
+      pageNumber:
+        type: integer
+        example: 1
+        description: Número de página actual
+      hasMoreElements:
+        type: boolean
+        example: true
+        description: Indica si hay más páginas disponibles
+
+  Task:
+    type: object
+    required:
+      - id
+      - organization_id
+      - user_id
+      - title
+      - status
+      - priority
+      - created_at
+      - updated_at
+    properties:
+      id:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      organization_id:
+        type: string
+        format: uuid
+        example: "660e8400-e29b-41d4-a716-446655440001"
+      user_id:
+        type: string
+        format: uuid
+        example: "770e8400-e29b-41d4-a716-446655440002"
+      title:
+        type: string
+        minLength: 1
+        maxLength: 255
+        example: "Completar informe mensual"
+      description:
+        type: string
+        maxLength: 2000
+        example: "Revisar y completar el informe de ventas del mes de junio"
+      status:
+        type: string
+        enum: [pending, completed, archived]
+        example: "pending"
+      priority:
+        type: string
+        enum: [low, medium, high, urgent]
+        example: "high"
+      category_id:
+        type: string
+        format: uuid
+        example: "880e8400-e29b-41d4-a716-446655440003"
+      category_name:
+        type: string
+        example: "Trabajo"
+        description: "Nombre de la categoría (denormalizado para UI)"
+      due_date:
+        type: string
+        format: date-time
+        example: "2026-07-15T23:59:59Z"
+      completed_at:
+        type: string
+        format: date-time
+        example: "2026-07-12T14:30:00Z"
+      tags:
+        type: array
+        items:
+          $ref: '#/definitions/Tag'
+      reminders:
+        type: array
+        items:
+          $ref: '#/definitions/Reminder'
+      voice_input_id:
+        type: string
+        format: uuid
+        example: "990e8400-e29b-41d4-a716-446655440004"
+        description: "ID de entrada por voz si fue creada así"
+      created_at:
+        type: string
+        format: date-time
+        example: "2026-07-10T09:00:00Z"
+      updated_at:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:30:00Z"
+
+  TaskCreateRequest:
+    type: object
+    required:
+      - title
+    properties:
+      title:
+        type: string
+        minLength: 1
+        maxLength: 255
+        example: "Completar informe mensual"
+      description:
+        type: string
+        maxLength: 2000
+        example: "Revisar y completar el informe de ventas del mes de junio"
+      priority:
+        type: string
+        enum: [low, medium, high, urgent]
+        default: medium
+        example: "high"
+      category_id:
+        type: string
+        format: uuid
+        example: "880e8400-e29b-41d4-a716-446655440003"
+      due_date:
+        type: string
+        format: date-time
+        example: "2026-07-15T23:59:59Z"
+      tag_ids:
+        type: array
+        items:
+          type: string
+          format: uuid
+        example: ["111e8400-e29b-41d4-a716-446655440011", "222e8400-e29b-41d4-a716-446655440022"]
+      reminder:
+        type: object
+        description: "Recordatorio asociado (opcional)"
+        properties:
+          remind_at:
+            type: string
+            format: date-time
+            example: "2026-07-15T09:00:00Z"
+          notification_type:
+            type: string
+            enum: [push, email, both]
+            default: push
+
+  TaskUpdateRequest:
+    type: object
+    required:
+      - title
+    properties:
+      title:
+        type: string
+        minLength: 1
+        maxLength: 255
+      description:
+        type: string
+        maxLength: 2000
+      status:
+        type: string
+        enum: [pending, completed, archived]
+      priority:
+        type: string
+        enum: [low, medium, high, urgent]
+      category_id:
+        type: string
+        format: uuid
+      due_date:
+        type: string
+        format: date-time
+      tag_ids:
+        type: array
+        items:
+          type: string
+          format: uuid
+
+  TaskPatchRequest:
+    type: object
+    description: "Todos los campos son opcionales, solo actualiza los proporcionados"
+    properties:
+      title:
+        type: string
+        minLength: 1
+        maxLength: 255
+      description:
+        type: string
+        maxLength: 2000
+      status:
+        type: string
+        enum: [pending, completed, archived]
+      priority:
+        type: string
+        enum: [low, medium, high, urgent]
+      category_id:
+        type: string
+        format: uuid
+      due_date:
+        type: string
+        format: date-time
+      tag_ids:
+        type: array
+        items:
+          type: string
+          format: uuid
+
+  Tag:
+    type: object
+    required:
+      - id
+      - name
+      - color
+    properties:
+      id:
+        type: string
+        format: uuid
+        example: "111e8400-e29b-41d4-a716-446655440011"
+      name:
+        type: string
+        example: "Urgente"
+      color:
+        type: string
+        example: "#EF4444"
+
+  Reminder:
+    type: object
+    required:
+      - id
+      - remind_at
+      - notification_type
+      - status
+    properties:
+      id:
+        type: string
+        format: uuid
+        example: "333e8400-e29b-41d4-a716-446655440033"
+      remind_at:
+        type: string
+        format: date-time
+        example: "2026-07-15T09:00:00Z"
+      notification_type:
+        type: string
+        enum: [push, email, both]
+        example: "push"
+      status:
+        type: string
+        enum: [pending, sent, cancelled]
+        example: "pending"
+
+  TaskStats:
+    type: object
+    properties:
+      period:
+        type: string
+        example: "month"
+      total_tasks:
+        type: integer
+        example: 150
+      by_status:
+        type: object
+        properties:
+          pending:
+            type: integer
+            example: 45
+          completed:
+            type: integer
+            example: 100
+          archived:
+            type: integer
+            example: 5
+      by_priority:
+        type: object
+        properties:
+          low:
+            type: integer
+            example: 20
+          medium:
+            type: integer
+            example: 80
+          high:
+            type: integer
+            example: 40
+          urgent:
+            type: integer
+            example: 10
+      completion_rate:
+        type: number
+        format: float
+        example: 66.67
+        description: "Porcentaje de tareas completadas"
+      overdue_tasks:
+        type: integer
+        example: 8
+        description: "Tareas vencidas no completadas"
+      completed_this_period:
+        type: integer
+        example: 35
+      avg_completion_time_hours:
+        type: number
+        format: float
+        example: 48.5
+        description: "Promedio de horas para completar tareas"
+      tasks_by_category:
+        type: array
+        items:
+          type: object
+          properties:
+            category_id:
+              type: string
+              format: uuid
+            category_name:
+              type: string
+            count:
+              type: integer
+
+  ErrorResponse:
+    type: object
+    required:
+      - headers
+      - messageResponse
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        required:
+          - responseCode
+          - responseMessage
+        properties:
+          responseCode:
+            type: string
+            example: "0400"
+          responseMessage:
+            type: string
+            example: "Bad Request"
+          responseDetail:
+            type: string
+            example: "Validation error"
+      errors:
+        type: array
+        items:
+          type: object
+          required:
+            - errorCode
+            - errorDetail
+          properties:
+            errorCode:
+              type: string
+              example: "FIELD_REQUIRED"
+            errorDetail:
+              type: string
+              example: "El campo 'title' es requerido"

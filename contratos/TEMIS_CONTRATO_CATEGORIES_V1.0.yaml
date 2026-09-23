@@ -1,0 +1,430 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Categorías
+  description: |
+    API REST para gestión de categorías en TEMIS.
+
+    Las categorías se usan para organizar:
+    - Tareas
+    - Transacciones financieras
+    - Contraseñas
+
+    **Características:**
+    - CRUD completo
+    - Iconos y colores personalizables
+    - Categorías predefinidas del sistema
+    - Categorías personalizadas por usuario
+    - Jerarquía (categorías padre/hijo)
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Categories
+    description: Operaciones CRUD sobre categorías
+
+paths:
+  /categories:
+    get:
+      tags:
+        - Categories
+      summary: Listar categorías
+      description: |
+        Lista todas las categorías disponibles para el usuario:
+        - Categorías del sistema (predefinidas, no editables)
+        - Categorías personalizadas del usuario
+      operationId: listCategories
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: type
+          in: query
+          required: false
+          type: string
+          enum: [task, transaction, password]
+          description: Filtrar por tipo de categoría
+        - name: include_system
+          in: query
+          required: false
+          type: boolean
+          default: true
+          description: Incluir categorías del sistema
+        - name: search
+          in: query
+          required: false
+          type: string
+      responses:
+        200:
+          description: Lista de categorías
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Category'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    post:
+      tags:
+        - Categories
+      summary: Crear categoría personalizada
+      operationId: createCategory
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/CategoryCreateRequest'
+      responses:
+        201:
+          description: Categoría creada
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  category:
+                    $ref: '#/definitions/Category'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        422:
+          description: Límite de categorías alcanzado según plan
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /categories/{categoryId}:
+    get:
+      tags:
+        - Categories
+      summary: Obtener categoría por ID
+      operationId: getCategoryById
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: categoryId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Categoría obtenida
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  category:
+                    $ref: '#/definitions/Category'
+        404:
+          description: Categoría no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Categories
+      summary: Actualizar categoría personalizada
+      description: Solo se pueden editar categorías personalizadas, no las del sistema
+      operationId: updateCategory
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: categoryId
+          in: path
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/CategoryUpdateRequest'
+      responses:
+        200:
+          description: Categoría actualizada
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  category:
+                    $ref: '#/definitions/Category'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        403:
+          description: No se puede editar categoría del sistema
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        404:
+          description: Categoría no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Categories
+      summary: Eliminar categoría personalizada
+      description: |
+        Elimina una categoría personalizada.
+        - No se pueden eliminar categorías del sistema
+        - Los elementos que usan esta categoría quedarán sin categoría
+      operationId: deleteCategory
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: categoryId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Categoría eliminada
+        403:
+          description: No se puede eliminar categoría del sistema
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        404:
+          description: Categoría no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Category:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+        description: "null para categorías del sistema"
+      user_id:
+        type: string
+        format: uuid
+        description: "null para categorías del sistema"
+      name:
+        type: string
+        example: "Restaurantes"
+      icon:
+        type: string
+        example: "🍽️"
+        description: "Emoji o código de icono"
+      color:
+        type: string
+        example: "#EF4444"
+      category_type:
+        type: string
+        enum: [task, transaction, password, general]
+        example: "transaction"
+      parent_category_id:
+        type: string
+        format: uuid
+        description: "Para subcategorías"
+      is_system:
+        type: boolean
+        example: false
+        description: "true si es categoría predefinida"
+      usage_count:
+        type: integer
+        example: 45
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  CategoryCreateRequest:
+    type: object
+    required:
+      - name
+      - category_type
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 100
+        example: "Gimnasio"
+      icon:
+        type: string
+        maxLength: 10
+        example: "💪"
+      color:
+        type: string
+        pattern: '^#[0-9A-Fa-f]{6}$'
+        example: "#10B981"
+      category_type:
+        type: string
+        enum: [task, transaction, password, general]
+      parent_category_id:
+        type: string
+        format: uuid
+
+  CategoryUpdateRequest:
+    type: object
+    required:
+      - name
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 100
+      icon:
+        type: string
+        maxLength: 10
+      color:
+        type: string
+        pattern: '^#[0-9A-Fa-f]{6}$'
+      parent_category_id:
+        type: string
+        format: uuid
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

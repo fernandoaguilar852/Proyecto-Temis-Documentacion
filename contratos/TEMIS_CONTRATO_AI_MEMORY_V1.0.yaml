@@ -1,0 +1,1858 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de AI Memory
+  description: |
+    API REST para el módulo AI Memory ("Tu Segunda Memoria Digital") en la plataforma TEMIS.
+
+    **Funcionalidades principales:**
+    - Grabar y almacenar conversaciones con transcripción automática
+    - Capturar fotos con procesamiento OCR inteligente
+    - Guardar documentos con extracción de texto
+    - Recibir y procesar emails reenviados
+    - Crear notas de voz con transcripción
+    - Búsqueda semántica con IA usando embeddings
+    - Búsqueda por texto tradicional
+    - Organización con etiquetas
+    - Gestión de storage y cuotas por plan
+    - Insights y resúmenes automáticos generados por IA
+
+    **Tecnologías de IA:**
+    - AWS Transcribe: Conversión de audio a texto
+    - AWS Textract: OCR de imágenes y documentos
+    - Amazon Bedrock (Claude 3.5 Sonnet): Análisis, embeddings y búsqueda semántica
+    - pgvector: Búsqueda vectorial en PostgreSQL
+
+    **Autenticación:** Bearer JWT Token (RS256)
+
+    **Cuotas por plan:**
+
+    | Plan | Storage | Conversaciones/mes | Fotos OCR/mes | Documentos/mes | Emails/mes | Notas voz/mes | Búsquedas IA/mes |
+    |------|---------|-------------------|---------------|----------------|------------|---------------|------------------|
+    | Free | 2 GB | 5 | 10 | 0 | 0 | 10 | 10 |
+    | Basic | 5 GB | 20 | 50 | 20 | 20 | 50 | 50 |
+    | Pro | 20 GB | 100 | 200 | 100 | 100 | 200 | 200 |
+    | Premium | 100 GB | Ilimitado | Ilimitado | Ilimitado | Ilimitado | Ilimitado | Ilimitado |
+
+    **Límites de tamaño de archivo:**
+
+    | Tipo de Archivo | Tamaño Máximo | Formatos Soportados | Validación |
+    |----------------|---------------|---------------------|------------|
+    | **Fotos** | 10 MB | JPG, PNG, HEIC, WEBP | Validación en backend |
+    | **Documentos** | 25 MB | PDF, DOC, DOCX, TXT | Validación en backend |
+    | **Audio (conversaciones/notas)** | 50 MB (máx 30 min) | MP3, M4A, WAV, OGG | Validación tamaño + duración |
+    | **Videos** | No soportado | N/A | Retorna 415 Unsupported Media Type |
+
+    **Proceso de validación:**
+    1. Cliente envía archivo en base64 en el body
+    2. Backend decodifica base64 y calcula tamaño real
+    3. Si excede el límite → Retorna `413 Payload Too Large`
+    4. Si es audio, después de transcripción verifica duración
+    5. Si duración > 30 min → Retorna `422` y elimina de S3
+
+    **Response 413 (Payload Too Large):**
+    ```json
+    {
+      "success": false,
+      "error": {
+        "code": "FILE_TOO_LARGE",
+        "message": "El archivo excede el tamaño máximo permitido",
+        "maxSizeBytes": 10485760,
+        "actualSizeBytes": 15728640,
+        "fileType": "photo"
+      }
+    }
+    ```
+
+    **Response 422 (Duración excedida - Audio):**
+    ```json
+    {
+      "success": false,
+      "error": {
+        "code": "DURATION_TOO_LONG",
+        "message": "La duración del audio excede el máximo permitido",
+        "maxDurationSeconds": 1800,
+        "detectedDurationSeconds": 2400
+      }
+    }
+    ```
+
+    **GDPR Compliance:**
+    - DELETE /memories/{id}: Derecho al olvido (Art. 17)
+    - GET /memories/export: Portabilidad de datos (Art. 20)
+    - Todos los endpoints requieren JWT con organization_id + user_id (RLS)
+
+  version: 1.0.0
+  contact:
+    name: Equipo TEMIS
+    email: soporte@temis.app
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: 'Token JWT en formato: Bearer {token}'
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Memories
+    description: Operaciones CRUD sobre memorias
+  - name: Attachments
+    description: Gestión de archivos adjuntos (audio, fotos, documentos)
+  - name: Search
+    description: Búsqueda de memorias (semántica y por texto)
+  - name: Storage
+    description: Gestión y monitoreo de almacenamiento
+  - name: Insights
+    description: Resúmenes e insights generados por IA
+
+paths:
+  /memories:
+    get:
+      tags:
+        - Memories
+      summary: Listar memorias del usuario
+      description: |
+        Obtiene todas las memorias del usuario autenticado con filtros opcionales y paginación.
+
+        **Filtros disponibles:**
+        - Tipo de memoria (conversation, photo, document, email, voice_note)
+        - Estado (processing, ready, failed)
+        - Favoritos
+        - Archivadas
+        - Rango de fechas
+        - Etiquetas
+        - Búsqueda por texto
+      operationId: listMemories
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador único de trazabilidad del request
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+          description: Identificador de la aplicación consumidora
+
+        - name: X-Device-ID
+          in: header
+          required: false
+          type: string
+          description: Identificador único del dispositivo
+
+        - name: memory_type
+          in: query
+          required: false
+          type: string
+          enum: [conversation, photo, document, email, voice_note]
+          description: Filtrar por tipo de memoria
+
+        - name: status
+          in: query
+          required: false
+          type: string
+          enum: [processing, ready, failed]
+          description: Filtrar por estado de procesamiento
+
+        - name: is_favorite
+          in: query
+          required: false
+          type: boolean
+          description: Solo memorias marcadas como favoritas
+
+        - name: is_archived
+          in: query
+          required: false
+          type: boolean
+          description: Incluir o excluir memorias archivadas
+
+        - name: tags
+          in: query
+          required: false
+          type: array
+          items:
+            type: string
+          collectionFormat: csv
+          description: Filtrar por etiquetas (comma-separated)
+
+        - name: captured_from
+          in: query
+          required: false
+          type: string
+          format: date-time
+          description: Fecha de captura desde (ISO 8601)
+
+        - name: captured_to
+          in: query
+          required: false
+          type: string
+          format: date-time
+          description: Fecha de captura hasta (ISO 8601)
+
+        - name: search
+          in: query
+          required: false
+          type: string
+          description: Buscar en título, descripción y resumen
+
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+          description: Tamaño de página
+
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+          minimum: 1
+          description: Número de página
+
+      responses:
+        '200':
+          description: Lista de memorias obtenida exitosamente
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                type: object
+                properties:
+                  memories:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Memory'
+                  pagination:
+                    $ref: '#/definitions/Pagination'
+        '400':
+          $ref: '#/responses/BadRequest'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+    post:
+      tags:
+        - Memories
+      summary: Crear nueva memoria
+      description: |
+        Crea una nueva memoria. Este endpoint NO sube archivos, solo crea el registro.
+        Para subir archivos adjuntos, usar POST /memories/{id}/attachments después.
+
+        **Validación de cuotas:**
+        - Se verifica que el usuario no haya excedido su cuota mensual según el tipo de memoria
+        - Se verifica que haya espacio de storage disponible (para archivos)
+      operationId: createMemory
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: X-Device-ID
+          in: header
+          required: false
+          type: string
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/CreateMemoryRequest'
+
+      responses:
+        '201':
+          description: Memoria creada exitosamente
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                $ref: '#/definitions/Memory'
+              message:
+                type: string
+                example: "Memoria creada exitosamente"
+        '400':
+          $ref: '#/responses/BadRequest'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '403':
+          description: Cuota excedida
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "QUOTA_EXCEEDED"
+                  message:
+                    type: string
+                    example: "Has excedido tu cuota mensual de conversaciones. Upgrade a Pro para más."
+                  quota_info:
+                    type: object
+                    properties:
+                      current:
+                        type: integer
+                        example: 5
+                      limit:
+                        type: integer
+                        example: 5
+                      reset_date:
+                        type: string
+                        format: date-time
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  /memories/{id}:
+    get:
+      tags:
+        - Memories
+      summary: Obtener detalle de una memoria
+      description: |
+        Obtiene el detalle completo de una memoria específica, incluyendo:
+        - Metadatos básicos
+        - Archivos adjuntos
+        - Transcripciones y OCR
+        - Entidades extraídas por IA
+        - Resumen generado por IA
+      operationId: getMemory
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: id
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID de la memoria
+
+      responses:
+        '200':
+          description: Detalle de memoria obtenido exitosamente
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                $ref: '#/definitions/MemoryDetail'
+        '404':
+          $ref: '#/responses/NotFound'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+    put:
+      tags:
+        - Memories
+      summary: Actualizar memoria
+      description: |
+        Actualiza los metadatos de una memoria existente.
+        No se pueden modificar archivos adjuntos (solo añadir/eliminar).
+      operationId: updateMemory
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: id
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/UpdateMemoryRequest'
+
+      responses:
+        '200':
+          description: Memoria actualizada exitosamente
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                $ref: '#/definitions/Memory'
+              message:
+                type: string
+                example: "Memoria actualizada exitosamente"
+        '400':
+          $ref: '#/responses/BadRequest'
+        '404':
+          $ref: '#/responses/NotFound'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Memories
+      summary: Eliminar memoria
+      description: |
+        Elimina una memoria (soft delete). La memoria se marca como eliminada
+        pero se puede recuperar durante 30 días.
+
+        Después de 30 días, se elimina permanentemente junto con todos sus archivos en S3.
+      operationId: deleteMemory
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: id
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        '200':
+          description: Memoria eliminada exitosamente
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              message:
+                type: string
+                example: "Memoria eliminada. Puedes recuperarla en los próximos 30 días."
+        '404':
+          $ref: '#/responses/NotFound'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  /memories/{id}/attachments:
+    post:
+      tags:
+        - Attachments
+      summary: Subir archivo adjunto a una memoria
+      description: |
+        Sube un archivo adjunto (audio, foto, documento) a una memoria existente.
+
+        **Proceso:**
+        1. Se obtiene pre-signed URL de S3
+        2. Cliente sube archivo directamente a S3 usando la URL
+        3. Lambda procesa el archivo en background:
+           - Audio: transcripción con AWS Transcribe
+           - Foto: OCR con AWS Textract
+           - Documento: extracción de texto
+           - IA: análisis, extracción de entidades, embeddings
+        4. Cliente recibe notificación cuando el procesamiento termina
+
+        **Validaciones:**
+        - Tamaño máximo según plan
+        - Formato de archivo permitido
+        - Espacio de storage disponible
+        - Cuota mensual no excedida
+      operationId: uploadAttachment
+      consumes:
+        - multipart/form-data
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: id
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID de la memoria
+
+        - name: file
+          in: formData
+          required: true
+          type: file
+          description: Archivo a subir
+
+        - name: attachment_type
+          in: formData
+          required: true
+          type: string
+          enum: [audio, photo, document, email_attachment]
+          description: Tipo de archivo
+
+      responses:
+        '202':
+          description: Archivo en proceso de subida y análisis
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                type: object
+                properties:
+                  attachment_id:
+                    type: string
+                    format: uuid
+                  upload_url:
+                    type: string
+                    description: Pre-signed URL de S3 para subir el archivo
+                  status:
+                    type: string
+                    example: "pending"
+              message:
+                type: string
+                example: "Archivo subido. Procesamiento iniciado."
+        '400':
+          $ref: '#/responses/BadRequest'
+        '403':
+          description: Cuota de storage excedida
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "STORAGE_QUOTA_EXCEEDED"
+                  message:
+                    type: string
+                    example: "No tienes suficiente espacio. Usado: 1.8 GB de 2 GB."
+        '404':
+          $ref: '#/responses/NotFound'
+        '413':
+          description: Archivo demasiado grande
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "FILE_TOO_LARGE"
+                  message:
+                    type: string
+                    example: "El archivo excede el límite de 50 MB para tu plan."
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  /memories/search:
+    post:
+      tags:
+        - Search
+      summary: Búsqueda semántica con IA
+      description: |
+        Realiza búsqueda semántica usando embeddings de Amazon Bedrock.
+        El usuario puede hacer preguntas en lenguaje natural y la IA encontrará
+        las memorias más relevantes por contexto y significado, no solo palabras clave.
+
+        **Ejemplos de búsquedas:**
+        - "¿Qué restaurante me recomendaron hace 3 meses?"
+        - "¿Qué dijo el médico sobre mi colesterol?"
+        - "¿Dónde guardé la garantía del televisor?"
+        - "Información sobre ese hotel en Cancún"
+
+        **Algoritmo:**
+        1. Generar embedding de la pregunta con Bedrock
+        2. Búsqueda vectorial en PostgreSQL (pgvector)
+        3. Re-ranking con Bedrock considerando contexto
+        4. Retornar top 5-10 resultados más relevantes
+
+        **Cuota:** Consume 1 búsqueda IA de la cuota mensual del plan
+      operationId: searchMemoriesAI
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - query
+            properties:
+              query:
+                type: string
+                description: Pregunta en lenguaje natural
+                example: "¿Qué restaurante me recomendaron el mes pasado?"
+              filters:
+                type: object
+                description: Filtros opcionales para acotar la búsqueda
+                properties:
+                  memory_types:
+                    type: array
+                    items:
+                      type: string
+                      enum: [conversation, photo, document, email, voice_note]
+                  date_from:
+                    type: string
+                    format: date-time
+                  date_to:
+                    type: string
+                    format: date-time
+                  tags:
+                    type: array
+                    items:
+                      type: string
+              max_results:
+                type: integer
+                default: 10
+                minimum: 1
+                maximum: 20
+
+      responses:
+        '200':
+          description: Búsqueda completada exitosamente
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                type: object
+                properties:
+                  query:
+                    type: string
+                    example: "¿Qué restaurante me recomendaron el mes pasado?"
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        memory:
+                          $ref: '#/definitions/Memory'
+                        relevance_score:
+                          type: number
+                          format: float
+                          description: Score de relevancia (0-1)
+                          example: 0.95
+                        snippet:
+                          type: string
+                          description: Fragmento relevante que coincide con la búsqueda
+                          example: "...me recomendó un restaurante italiano increíble que se llama La Trattoria..."
+                        explanation:
+                          type: string
+                          description: Explicación de por qué es relevante (generada por IA)
+                          example: "Esta memoria contiene una recomendación de restaurante italiano hace 2 meses."
+                  total_results:
+                    type: integer
+                    example: 3
+                  search_time_ms:
+                    type: integer
+                    description: Tiempo de búsqueda en milisegundos
+                    example: 1250
+        '400':
+          $ref: '#/responses/BadRequest'
+        '403':
+          description: Cuota de búsquedas IA excedida
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "AI_SEARCH_QUOTA_EXCEEDED"
+                  message:
+                    type: string
+                    example: "Has usado tus 10 búsquedas IA del mes. Upgrade a Pro para más."
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  /memories/search/text:
+    get:
+      tags:
+        - Search
+      summary: Búsqueda por texto tradicional
+      description: |
+        Búsqueda full-text tradicional en PostgreSQL.
+        Busca en: título, descripción, transcripciones, texto OCR.
+
+        **No consume cuota de búsquedas IA.**
+      operationId: searchMemoriesText
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: q
+          in: query
+          required: true
+          type: string
+          description: Texto a buscar
+
+        - name: memory_type
+          in: query
+          required: false
+          type: string
+          enum: [conversation, photo, document, email, voice_note]
+
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+          minimum: 1
+
+      responses:
+        '200':
+          description: Búsqueda completada
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Memory'
+                  pagination:
+                    $ref: '#/definitions/Pagination'
+        '400':
+          $ref: '#/responses/BadRequest'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  /memories/storage:
+    get:
+      tags:
+        - Storage
+      summary: Obtener información de almacenamiento
+      description: |
+        Obtiene información detallada del uso de almacenamiento del usuario.
+
+        Incluye:
+        - Storage total usado
+        - Límite según plan
+        - Desglose por tipo de memoria
+        - Lista de archivos más grandes
+        - Recomendaciones de limpieza
+      operationId: getStorageInfo
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        '200':
+          description: Información de storage obtenida
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                $ref: '#/definitions/StorageInfo'
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  /memories/insights/weekly:
+    get:
+      tags:
+        - Insights
+      summary: Obtener resumen semanal
+      description: |
+        Obtiene el resumen semanal generado automáticamente por IA.
+        Incluye:
+        - Memorias guardadas esta semana
+        - Temas principales
+        - Búsquedas frecuentes
+        - Sugerencias de organización
+
+        **Se genera automáticamente cada lunes.**
+        **Consume cuota de insights del plan.**
+      operationId: getWeeklyInsight
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: week
+          in: query
+          required: false
+          type: string
+          format: date
+          description: Fecha de inicio de semana (lunes). Por defecto, semana actual.
+
+      responses:
+        '200':
+          description: Resumen semanal obtenido
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                $ref: '#/definitions/WeeklyInsight'
+        '403':
+          description: Plan no incluye insights
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "FEATURE_NOT_AVAILABLE"
+                  message:
+                    type: string
+                    example: "Los insights semanales están disponibles desde el plan Basic."
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  # ======================================
+  # DELETE MEMORY (GDPR - DERECHO AL OLVIDO)
+  # ======================================
+
+  /memories/{memoryId}:
+    delete:
+      tags:
+        - Memories
+      summary: Eliminar memoria permanentemente (GDPR)
+      description: |
+        Elimina una memoria y TODOS sus attachments y embeddings asociados.
+
+        **GDPR - Derecho al Olvido (Right to Erasure)**:
+        - Cumple con GDPR Art. 17
+        - Elimina datos personales de forma irreversible
+        - Eliminación física de archivos en S3
+        - Eliminación de embeddings en PostgreSQL (pgvector)
+        - Operación NO reversible
+
+        **Proceso de eliminación**:
+        1. Verificar ownership (RLS - organization_id + user_id)
+        2. Listar todos los attachments de la memoria
+        3. Eliminar archivos de S3 (fotos, documentos, audios)
+        4. DELETE CASCADE en memory_attachments
+        5. DELETE CASCADE en memory_embeddings
+        6. DELETE registro de memoria
+        7. Actualizar storage_used del usuario (decrementar)
+        8. Registrar en audit_logs
+
+        **Impacto en storage_used**:
+        - Se reduce el storage_used del usuario
+        - Si usuario está en límite, puede volver a subir archivos
+
+        **Audit Trail**:
+        - Acción: "memory_deleted"
+        - Metadata: memory_id, tipo, tamaño liberado
+      security:
+        - Bearer: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          type: string
+          description: Bearer JWT Token
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: memoryId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID de la memoria a eliminar
+      responses:
+        '204':
+          description: Memoria eliminada exitosamente (No Content)
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '403':
+          description: Sin permisos para eliminar esta memoria
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "FORBIDDEN"
+                  message:
+                    type: string
+                    example: "No tienes permisos para eliminar esta memoria"
+        '404':
+          description: Memoria no encontrada
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "MEMORY_NOT_FOUND"
+                  message:
+                    type: string
+                    example: "La memoria no existe o ya fue eliminada"
+        '422':
+          description: Suscripción expirada (READ-ONLY mode)
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "SUBSCRIPTION_EXPIRED"
+                  message:
+                    type: string
+                    example: "Tu suscripción ha expirado. Solo tienes acceso de lectura."
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  # ======================================
+  # DELETE ATTACHMENT (GDPR)
+  # ======================================
+
+  /memories/{memoryId}/attachments/{attachmentId}:
+    delete:
+      tags:
+        - Attachments
+      summary: Eliminar attachment individual de una memoria
+      description: |
+        Elimina un archivo adjunto específico de una memoria.
+
+        **Casos de uso**:
+        - Usuario quiere eliminar solo una foto de varias en una memoria
+        - Eliminar documento sensible pero mantener transcripción
+        - Reducir tamaño de memoria sin eliminarla completa
+
+        **Proceso**:
+        1. Verificar ownership (RLS)
+        2. Obtener metadata del attachment (file_path, size_bytes)
+        3. Eliminar archivo de S3
+        4. DELETE de memory_attachments
+        5. Actualizar storage_used del usuario
+        6. Si es el único attachment, la memoria queda sin archivos adjuntos pero mantiene texto/metadata
+      security:
+        - Bearer: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          type: string
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: memoryId
+          in: path
+          required: true
+          type: string
+          format: uuid
+        - name: attachmentId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Attachment eliminado exitosamente
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '403':
+          description: Sin permisos
+        '404':
+          description: Attachment no encontrado
+        '422':
+          description: Suscripción expirada
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  # ======================================
+  # EXPORT MEMORIES (GDPR - PORTABILIDAD DE DATOS)
+  # ======================================
+
+  /memories/export:
+    get:
+      tags:
+        - Memories
+      summary: Exportar todas las memorias del usuario (GDPR - Data Portability)
+      description: |
+        Genera un archivo ZIP con TODAS las memorias del usuario en formato portable.
+
+        **GDPR - Derecho a la Portabilidad de Datos (Art. 20)**:
+        - Usuario puede descargar todos sus datos
+        - Formato estructurado, de uso común y lectura mecánica (JSON)
+        - Incluye archivos originales (fotos, documentos, audios)
+        - Puede ser importado a otro sistema
+
+        **Contenido del ZIP**:
+        ```
+        /export_USERID_TIMESTAMP.zip
+          ├── manifest.json (metadata del export)
+          ├── memories.json (todos los datos estructurados)
+          ├── /attachments/
+          │   ├── conversation_123/audio.mp3
+          │   ├── photo_456/image.jpg
+          │   └── document_789/file.pdf
+          └── README.txt (instrucciones)
+        ```
+
+        **Proceso asíncrono** (puede tardar varios minutos):
+        1. Crea export_job en PostgreSQL
+        2. Retorna export_job_id inmediatamente (202 Accepted)
+        3. Lambda procesa en background:
+           - Serializa memorias a JSON
+           - Descarga attachments de S3
+           - Crea ZIP
+           - Sube ZIP a S3 con pre-signed URL (expira 24h)
+        4. Cliente consulta /memories/export/{jobId}/status
+        5. Cuando status="completed", obtiene download_url
+
+        **Tamaño máximo del export**:
+        - Depende del storage_used del usuario
+        - Free (2GB): Export hasta 2GB
+        - Premium (100GB): Export hasta 100GB
+
+        **Expiración**:
+        - Download URL válida por 24 horas
+        - Después se elimina automáticamente (lambda-maintenance)
+      security:
+        - Bearer: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          type: string
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: include_embeddings
+          in: query
+          type: boolean
+          default: false
+          description: |
+            Incluir embeddings (vectores) en el export.
+            ADVERTENCIA: Aumenta significativamente el tamaño (1536 floats por memoria).
+            Solo útil para análisis técnico o migración a otro sistema con pgvector.
+      responses:
+        '202':
+          description: Export job creado y procesando
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                type: object
+                properties:
+                  exportJobId:
+                    type: string
+                    format: uuid
+                    example: "export-123e4567-e89b-12d3-a456-426614174000"
+                  status:
+                    type: string
+                    example: "processing"
+                    enum: [processing, completed, failed]
+                  estimatedTimeMinutes:
+                    type: integer
+                    example: 5
+                    description: Tiempo estimado basado en storage_used
+                  statusUrl:
+                    type: string
+                    example: "/v1/memories/export/export-123e4567-e89b-12d3-a456-426614174000/status"
+                  createdAt:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '429':
+          description: Rate limit - Solo 1 export por hora
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "EXPORT_RATE_LIMIT"
+                  message:
+                    type: string
+                    example: "Solo puedes crear 1 export por hora. Intenta nuevamente en 45 minutos."
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+  # ======================================
+  # EXPORT STATUS
+  # ======================================
+
+  /memories/export/{jobId}/status:
+    get:
+      tags:
+        - Memories
+      summary: Consultar estado de exportación
+      description: |
+        Verifica el progreso del job de exportación.
+
+        **Estados posibles**:
+        - `processing`: En proceso (backend generando ZIP)
+        - `completed`: Completado (download_url disponible)
+        - `failed`: Falló (ver error)
+
+        **Polling recomendado**:
+        - Consultar cada 5 segundos mientras status="processing"
+        - Máximo 50 consultas (4 minutos)
+        - Si no completa en 4 minutos, probablemente falló
+      security:
+        - Bearer: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          type: string
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: jobId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID del export job
+      responses:
+        '200':
+          description: Estado del job
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: true
+              data:
+                type: object
+                properties:
+                  exportJobId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [processing, completed, failed]
+                    example: "completed"
+                  progressPercentage:
+                    type: integer
+                    example: 100
+                    description: Porcentaje de progreso (0-100)
+                  downloadUrl:
+                    type: string
+                    format: uri
+                    example: "https://s3.amazonaws.com/temis-exports/user-123/export.zip?signature=..."
+                    description: |
+                      Pre-signed URL de S3 (válida 24h).
+                      Solo disponible si status="completed".
+                  fileSizeBytes:
+                    type: integer
+                    example: 52428800
+                    description: Tamaño del archivo ZIP en bytes (50 MB)
+                  memoriesCount:
+                    type: integer
+                    example: 234
+                    description: Total de memorias incluidas
+                  attachmentsCount:
+                    type: integer
+                    example: 456
+                    description: Total de archivos adjuntos
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    description: Expiración del download_url
+                    example: "2026-07-13T10:30:00Z"
+                  createdAt:
+                    type: string
+                    format: date-time
+                  completedAt:
+                    type: string
+                    format: date-time
+                  error:
+                    type: object
+                    description: Solo si status="failed"
+                    properties:
+                      code:
+                        type: string
+                        example: "S3_UPLOAD_FAILED"
+                      message:
+                        type: string
+        '404':
+          description: Export job no encontrado
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: "EXPORT_JOB_NOT_FOUND"
+                  message:
+                    type: string
+        '401':
+          $ref: '#/responses/Unauthorized'
+        '500':
+          $ref: '#/responses/InternalServerError'
+
+definitions:
+  Memory:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      title:
+        type: string
+        example: "Consulta médico - Colesterol"
+      description:
+        type: string
+        example: "Revisión de exámenes de sangre"
+      memory_type:
+        type: string
+        enum: [conversation, photo, document, email, voice_note]
+        example: "conversation"
+      status:
+        type: string
+        enum: [processing, ready, failed]
+        example: "ready"
+      captured_at:
+        type: string
+        format: date-time
+      location_lat:
+        type: number
+        format: double
+        example: 19.432608
+      location_lng:
+        type: number
+        format: double
+        example: -99.133209
+      location_name:
+        type: string
+        example: "Ciudad de México, México"
+      ai_summary:
+        type: string
+        example: "Consulta médica sobre resultados de análisis de colesterol..."
+      ai_extracted_entities:
+        type: object
+        description: Entidades extraídas por IA
+        properties:
+          persons:
+            type: array
+            items:
+              type: string
+            example: ["Dr. López"]
+          places:
+            type: array
+            items:
+              type: string
+            example: ["Hospital Angeles"]
+          dates:
+            type: array
+            items:
+              type: string
+            example: ["2026-08-14"]
+          medications:
+            type: array
+            items:
+              type: string
+            example: ["Atorvastatina 20mg"]
+      ai_suggested_tags:
+        type: array
+        items:
+          type: string
+        example: ["Salud", "Médico", "Colesterol"]
+      is_favorite:
+        type: boolean
+        example: false
+      is_archived:
+        type: boolean
+        example: false
+      tags:
+        type: array
+        items:
+          type: string
+        example: ["Salud", "Importante"]
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  MemoryDetail:
+    allOf:
+      - $ref: '#/definitions/Memory'
+      - type: object
+        properties:
+          attachments:
+            type: array
+            items:
+              $ref: '#/definitions/Attachment'
+          related_memories:
+            type: array
+            description: Memorias relacionadas (sugeridas por IA)
+            items:
+              type: object
+              properties:
+                memory_id:
+                  type: string
+                  format: uuid
+                title:
+                  type: string
+                relation_reason:
+                  type: string
+                  example: "Ambas mencionan al Dr. López"
+
+  Attachment:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      memory_id:
+        type: string
+        format: uuid
+      attachment_type:
+        type: string
+        enum: [audio, photo, document, email_attachment]
+      s3_bucket:
+        type: string
+        example: "temis-ai-memory-prod"
+      s3_key:
+        type: string
+        example: "audios/org123/user456/memory789/recording.aac"
+      file_size_bytes:
+        type: integer
+        format: int64
+        example: 2548736
+      mime_type:
+        type: string
+        example: "audio/aac"
+      original_filename:
+        type: string
+        example: "consulta_medica.aac"
+      duration_seconds:
+        type: integer
+        example: 480
+      width:
+        type: integer
+        example: 1920
+      height:
+        type: integer
+        example: 1080
+      transcription_text:
+        type: string
+        example: "Doctor, vengo por los resultados de mis análisis..."
+      ocr_text:
+        type: string
+        example: "Resultado de Análisis - Colesterol Total: 210 mg/dL..."
+      extracted_data:
+        type: object
+        description: Datos estructurados extraídos
+      processing_status:
+        type: string
+        enum: [pending, processing, completed, failed]
+      processing_error:
+        type: string
+      created_at:
+        type: string
+        format: date-time
+      download_url:
+        type: string
+        description: Pre-signed URL para descargar el archivo (válida 5 min)
+        example: "https://s3.amazonaws.com/temis-ai-memory-prod/..."
+
+  CreateMemoryRequest:
+    type: object
+    required:
+      - title
+      - memory_type
+    properties:
+      title:
+        type: string
+        maxLength: 500
+        example: "Conversación con Ana sobre viajes"
+      description:
+        type: string
+        maxLength: 5000
+      memory_type:
+        type: string
+        enum: [conversation, photo, document, email, voice_note]
+      captured_at:
+        type: string
+        format: date-time
+        description: Fecha de captura. Por defecto, ahora.
+      location_lat:
+        type: number
+        format: double
+      location_lng:
+        type: number
+        format: double
+      location_name:
+        type: string
+        maxLength: 255
+      tags:
+        type: array
+        items:
+          type: string
+        example: ["Viajes", "Ideas"]
+
+  UpdateMemoryRequest:
+    type: object
+    properties:
+      title:
+        type: string
+        maxLength: 500
+      description:
+        type: string
+        maxLength: 5000
+      tags:
+        type: array
+        items:
+          type: string
+      is_favorite:
+        type: boolean
+      is_archived:
+        type: boolean
+
+  StorageInfo:
+    type: object
+    properties:
+      used_bytes:
+        type: integer
+        format: int64
+        example: 1932735283
+        description: Storage usado en bytes
+      used_gb:
+        type: number
+        format: float
+        example: 1.8
+        description: Storage usado en GB
+      limit_gb:
+        type: integer
+        example: 2
+        description: Límite de storage según plan
+      percentage_used:
+        type: number
+        format: float
+        example: 90.0
+        description: Porcentaje usado
+      breakdown:
+        type: object
+        description: Desglose por tipo de memoria
+        properties:
+          conversations:
+            type: object
+            properties:
+              count:
+                type: integer
+                example: 15
+              size_bytes:
+                type: integer
+                format: int64
+                example: 523456789
+          photos:
+            type: object
+            properties:
+              count:
+                type: integer
+                example: 42
+              size_bytes:
+                type: integer
+                format: int64
+                example: 852369147
+          documents:
+            type: object
+            properties:
+              count:
+                type: integer
+                example: 8
+              size_bytes:
+                type: integer
+                format: int64
+                example: 456123987
+          emails:
+            type: object
+            properties:
+              count:
+                type: integer
+                example: 12
+              size_bytes:
+                type: integer
+                format: int64
+                example: 85632147
+          voice_notes:
+            type: object
+            properties:
+              count:
+                type: integer
+                example: 23
+              size_bytes:
+                type: integer
+                format: int64
+                example: 15123213
+      largest_files:
+        type: array
+        description: Top 5 archivos más grandes
+        items:
+          type: object
+          properties:
+            memory_id:
+              type: string
+              format: uuid
+            memory_title:
+              type: string
+            attachment_id:
+              type: string
+              format: uuid
+            filename:
+              type: string
+            size_bytes:
+              type: integer
+              format: int64
+      recommendations:
+        type: array
+        items:
+          type: string
+        example:
+          - "Tienes 5 fotos duplicadas que puedes eliminar"
+          - "3 documentos grandes sin etiquetar"
+
+  WeeklyInsight:
+    type: object
+    properties:
+      week_start:
+        type: string
+        format: date
+        example: "2026-08-07"
+      week_end:
+        type: string
+        format: date
+        example: "2026-08-13"
+      total_memories:
+        type: integer
+        example: 12
+      breakdown:
+        type: object
+        properties:
+          conversations:
+            type: integer
+            example: 5
+          photos:
+            type: integer
+            example: 4
+          documents:
+            type: integer
+            example: 2
+          voice_notes:
+            type: integer
+            example: 1
+      top_topics:
+        type: array
+        items:
+          type: object
+          properties:
+            topic:
+              type: string
+              example: "Salud"
+            count:
+              type: integer
+              example: 3
+      most_searched:
+        type: array
+        items:
+          type: string
+        example:
+          - "información sobre seguro médico"
+          - "restaurante recomendado"
+      ai_summary:
+        type: string
+        example: |
+          Esta semana guardaste 12 memorias. Tus temas principales fueron Salud (3 memorias)
+          y Trabajo (4 memorias). Realizaste 7 búsquedas, principalmente sobre información médica.
+      suggestions:
+        type: array
+        items:
+          type: string
+        example:
+          - "Tienes 3 documentos sin etiquetar, ¿quieres que te ayude a organizarlos?"
+          - "Guardaste varias conversaciones sobre viajes, considera crear una etiqueta 'Vacaciones'"
+
+  Pagination:
+    type: object
+    properties:
+      total:
+        type: integer
+        example: 156
+      pageNumber:
+        type: integer
+        example: 1
+      pageSize:
+        type: integer
+        example: 20
+      totalPages:
+        type: integer
+        example: 8
+      hasNextPage:
+        type: boolean
+        example: true
+      hasPreviousPage:
+        type: boolean
+        example: false
+
+  ErrorResponse:
+    type: object
+    properties:
+      success:
+        type: boolean
+        example: false
+      error:
+        type: object
+        properties:
+          code:
+            type: string
+            example: "VALIDATION_ERROR"
+          message:
+            type: string
+            example: "El título es requerido"
+          details:
+            type: object
+
+responses:
+  BadRequest:
+    description: Solicitud inválida
+    schema:
+      $ref: '#/definitions/ErrorResponse'
+
+  Unauthorized:
+    description: No autorizado - Token inválido o expirado
+    schema:
+      $ref: '#/definitions/ErrorResponse'
+
+  NotFound:
+    description: Recurso no encontrado
+    schema:
+      $ref: '#/definitions/ErrorResponse'
+
+  InternalServerError:
+    description: Error interno del servidor
+    schema:
+      $ref: '#/definitions/ErrorResponse'

@@ -1,0 +1,661 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Administración
+  description: |
+    API REST para funciones administrativas de TEMIS.
+
+    **Acceso:**
+    - Requiere rol de administrador
+    - JWT con claim `role: admin`
+
+    **Funcionalidades:**
+    - Dashboard de métricas globales
+    - Gestión de usuarios y organizaciones
+    - Monitoreo de uso de recursos
+    - Gestión de suscripciones
+    - Audit logs y seguridad
+    - Reportes de facturación
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Dashboard
+    description: Métricas y estadísticas globales
+  - name: Users
+    description: Gestión de usuarios
+  - name: Organizations
+    description: Gestión de organizaciones
+  - name: Monitoring
+    description: Monitoreo del sistema
+
+paths:
+  /admin/dashboard:
+    get:
+      tags:
+        - Dashboard
+      summary: Obtener dashboard administrativo
+      description: |
+        Dashboard con métricas globales del sistema.
+
+        **Métricas incluidas:**
+        - Total de usuarios activos
+        - Nuevos registros (día/semana/mes)
+        - Suscripciones por plan
+        - Ingresos totales
+        - Uso de recursos AWS
+        - Transacciones procesadas
+        - Tasa de conversión
+      operationId: getAdminDashboard
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [day, week, month, year]
+          default: month
+      responses:
+        200:
+          description: Dashboard obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  dashboard:
+                    $ref: '#/definitions/AdminDashboard'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        403:
+          description: Sin permisos de administrador
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /admin/users:
+    get:
+      tags:
+        - Users
+      summary: Listar todos los usuarios
+      operationId: listAllUsers
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: search
+          in: query
+          required: false
+          type: string
+        - name: status
+          in: query
+          required: false
+          type: string
+          enum: [active, inactive, suspended]
+        - name: plan
+          in: query
+          required: false
+          type: string
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+      responses:
+        200:
+          description: Lista de usuarios
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/definitions/AdminUser'
+              pagination:
+                $ref: '#/definitions/Pagination'
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /admin/users/{userId}:
+    get:
+      tags:
+        - Users
+      summary: Obtener detalles de usuario
+      operationId: getAdminUserDetails
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: userId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Detalles del usuario
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/definitions/AdminUserDetails'
+        404:
+          description: Usuario no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    patch:
+      tags:
+        - Users
+      summary: Actualizar estado de usuario
+      description: |
+        Permite suspender, activar o modificar un usuario.
+
+        **Acciones:**
+        - Suspender cuenta
+        - Activar cuenta
+        - Cambiar plan de suscripción
+        - Reset password (envía email)
+      operationId: updateUserStatus
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: userId
+          in: path
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              is_active:
+                type: boolean
+              subscription_status:
+                type: string
+                enum: [active, suspended]
+              force_password_reset:
+                type: boolean
+      responses:
+        200:
+          description: Usuario actualizado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+        404:
+          description: Usuario no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /admin/organizations:
+    get:
+      tags:
+        - Organizations
+      summary: Listar organizaciones
+      operationId: listOrganizations
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+      responses:
+        200:
+          description: Lista de organizaciones
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  organizations:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Organization'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+  /admin/revenue:
+    get:
+      tags:
+        - Dashboard
+      summary: Obtener reporte de ingresos
+      description: Reporte detallado de ingresos por período
+      operationId: getRevenueReport
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: date_from
+          in: query
+          required: true
+          type: string
+          format: date
+        - name: date_to
+          in: query
+          required: true
+          type: string
+          format: date
+        - name: group_by
+          in: query
+          required: false
+          type: string
+          enum: [day, week, month]
+          default: month
+      responses:
+        200:
+          description: Reporte de ingresos
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  revenue:
+                    $ref: '#/definitions/RevenueReport'
+
+  /admin/monitoring:
+    get:
+      tags:
+        - Monitoring
+      summary: Obtener métricas de monitoreo
+      description: |
+        Métricas de uso de recursos AWS y sistema.
+
+        **Incluye:**
+        - Lambda invocations y errores
+        - RDS connections y queries
+        - S3 storage usado
+        - Bedrock tokens consumidos
+        - Transcribe minutos usados
+        - API Gateway requests
+      operationId: getMonitoring
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Métricas obtenidas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  monitoring:
+                    $ref: '#/definitions/MonitoringMetrics'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Pagination:
+    type: object
+    properties:
+      totalElement:
+        type: integer
+      pageSize:
+        type: integer
+      pageNumber:
+        type: integer
+      hasMoreElements:
+        type: boolean
+
+  AdminDashboard:
+    type: object
+    properties:
+      total_users:
+        type: integer
+        example: 5420
+      active_users:
+        type: integer
+        example: 4850
+      new_users_this_period:
+        type: integer
+        example: 142
+      subscriptions_by_plan:
+        type: object
+        properties:
+          free:
+            type: integer
+          basic:
+            type: integer
+          pro:
+            type: integer
+          premium:
+            type: integer
+      total_revenue:
+        type: number
+        format: float
+        example: 125000000.00
+      revenue_this_period:
+        type: number
+        format: float
+        example: 8500000.00
+      conversion_rate:
+        type: number
+        format: float
+        example: 12.5
+        description: "Porcentaje de conversión free to paid"
+      churn_rate:
+        type: number
+        format: float
+        example: 3.2
+        description: "Tasa de cancelación mensual"
+      transactions_processed:
+        type: integer
+        example: 156000
+      ai_calls_total:
+        type: integer
+        example: 45000
+
+  AdminUser:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      email:
+        type: string
+      full_name:
+        type: string
+      organization_id:
+        type: string
+        format: uuid
+      subscription_plan:
+        type: string
+        example: "Pro"
+      subscription_status:
+        type: string
+        enum: [active, trial, expired, cancelled]
+      is_active:
+        type: boolean
+      created_at:
+        type: string
+        format: date-time
+      last_login_at:
+        type: string
+        format: date-time
+
+  AdminUserDetails:
+    type: object
+    properties:
+      user:
+        $ref: '#/definitions/AdminUser'
+      usage_stats:
+        type: object
+        properties:
+          total_tasks:
+            type: integer
+          total_transactions:
+            type: integer
+          total_passwords:
+            type: integer
+          ai_calls_this_month:
+            type: integer
+      subscription_history:
+        type: array
+        items:
+          type: object
+          properties:
+            plan:
+              type: string
+            amount:
+              type: number
+            period_start:
+              type: string
+              format: date
+            period_end:
+              type: string
+              format: date
+
+  Organization:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      name:
+        type: string
+      total_users:
+        type: integer
+      created_at:
+        type: string
+        format: date-time
+
+  RevenueReport:
+    type: object
+    properties:
+      total_revenue:
+        type: number
+        format: float
+      by_period:
+        type: array
+        items:
+          type: object
+          properties:
+            period:
+              type: string
+              example: "2026-07"
+            revenue:
+              type: number
+              format: float
+            subscriptions_count:
+              type: integer
+      by_plan:
+        type: object
+        properties:
+          basic:
+            type: number
+          pro:
+            type: number
+          premium:
+            type: number
+
+  MonitoringMetrics:
+    type: object
+    properties:
+      lambda_invocations:
+        type: integer
+        example: 2500000
+      lambda_errors:
+        type: integer
+        example: 150
+      rds_connections_active:
+        type: integer
+        example: 45
+      s3_storage_gb:
+        type: number
+        format: float
+        example: 125.8
+      bedrock_tokens_total:
+        type: integer
+        example: 8500000
+      transcribe_minutes:
+        type: integer
+        example: 1200
+      api_requests_total:
+        type: integer
+        example: 5600000
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

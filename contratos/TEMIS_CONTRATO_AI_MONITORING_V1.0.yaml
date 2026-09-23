@@ -1,0 +1,1017 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Monitoreo y Control de IA
+  description: |
+    API REST para monitoreo y control de consumo de AWS Bedrock.
+
+    **Acceso:**
+    - Solo administradores (rol admin)
+    - Panel de administración web
+
+    **Funcionalidades:**
+    - Consultar costos y consumo de Bedrock
+    - Ver uso por usuario y organización
+    - Control de feature flags (habilitar/deshabilitar IA)
+    - Ajustar cuotas dinámicamente
+    - Alertas y proyecciones de costos
+    - Dashboard de métricas en tiempo real
+    - Estadísticas de uso por modelo
+    - **Notificaciones automáticas** con Amazon SNS
+
+    **Notificaciones Automáticas (Amazon SNS):**
+
+    El sistema envía alertas automáticas a los administradores cuando:
+
+    1. **Presupuesto mensual alcanza 80%** (WARNING)
+       - Asunto: "[TEMIS Alert] AI Budget at 80%"
+       - Acción: Revisar consumo y proyección
+       - Frecuencia: Una vez al alcanzar umbral
+
+    2. **Presupuesto mensual alcanza 90%** (CRITICAL)
+       - Asunto: "[TEMIS Alert] AI Budget at 90% - CRITICAL"
+       - Acción: Considerar ajustar cuotas o deshabilitar features
+       - Frecuencia: Una vez al alcanzar umbral
+
+    3. **Presupuesto mensual alcanza 100%** (EMERGENCY)
+       - Asunto: "[TEMIS Alert] AI Budget EXCEEDED - Auto-Disabled"
+       - Acción automática: Feature flag IA → false (IA deshabilitada)
+       - Requiere intervención manual para reactivar
+       - Frecuencia: Una vez + diaria mientras excedido
+
+    4. **Costo diario > $50** (INFO - Monitoreo)
+       - Asunto: "[TEMIS Info] High daily AI cost: $XX.XX"
+       - Acción: Revisar picos de uso
+       - Frecuencia: Diaria (Lambda-maintenance cron)
+
+    **Configuración SNS:**
+    ```javascript
+    // Topic ARN
+    const SNS_TOPIC_ARN = 'arn:aws:sns:us-east-1:123456789:temis-ai-budget-alerts';
+
+    // Subscriptores (emails de admins)
+    // Configurado en AWS SNS Console o Terraform
+    // - admin1@temis.app
+    // - admin2@temis.app
+    ```
+
+    **Plantilla de Email:**
+    ```
+    Subject: [TEMIS Alert] AI Budget at {percentage}%
+
+    Current Month: {YYYY-MM}
+    ---
+    Current Spend: ${current_cost}
+    Monthly Budget: ${budget}
+    Percentage: {percentage}%
+
+    Projected End-of-Month: ${projected_cost}
+    Days Remaining: {days_remaining}
+
+    Top 5 Users by Cost:
+    1. user@example.com - ${XX.XX}
+    2. ...
+
+    Recommended Actions:
+    - Review AI quota limits per plan
+    - Consider reducing free tier AI allowance
+    - Check for unusual usage patterns
+    - {if >= 100%} CRITICAL: AI features auto-disabled
+
+    Dashboard: https://admin.temis.com/ai-monitoring
+    ```
+
+    **Endpoints para gestionar notificaciones:**
+    - GET /admin/ai-monitoring/alert-settings: Ver configuración actual
+    - PUT /admin/ai-monitoring/alert-settings: Actualizar emails/configuración
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: AI Costs
+    description: Consulta de costos de Bedrock
+  - name: AI Usage
+    description: Estadísticas de uso de IA
+  - name: AI Control
+    description: Control de feature flags y cuotas
+
+paths:
+  /admin/ai-monitoring/dashboard:
+    get:
+      tags:
+        - AI Costs
+      summary: Dashboard de monitoreo de IA
+      description: |
+        Obtiene un resumen completo del consumo de IA.
+
+        **Métricas incluidas:**
+        - Costo total del mes actual
+        - Costo proyectado fin de mes
+        - Total de llamadas/tokens
+        - Costo por modelo (Claude 3.5 Sonnet)
+        - Top usuarios por consumo
+        - Estado del presupuesto
+      operationId: getAIDashboard
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Dashboard obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  dashboard:
+                    $ref: '#/definitions/AIDashboard'
+        403:
+          description: Sin permisos de administrador
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /admin/ai-monitoring/costs:
+    get:
+      tags:
+        - AI Costs
+      summary: Consultar costos de Bedrock
+      description: |
+        Consulta costos históricos de AWS Bedrock usando Cost Explorer API.
+
+        **Granularidad:**
+        - DAILY: Por día
+        - MONTHLY: Por mes
+      operationId: getAICosts
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: start_date
+          in: query
+          required: true
+          type: string
+          format: date
+          description: Fecha inicio (YYYY-MM-DD)
+        - name: end_date
+          in: query
+          required: true
+          type: string
+          format: date
+          description: Fecha fin (YYYY-MM-DD)
+        - name: granularity
+          in: query
+          required: false
+          type: string
+          enum: [DAILY, MONTHLY]
+          default: DAILY
+      responses:
+        200:
+          description: Costos obtenidos
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  costs:
+                    type: object
+                    properties:
+                      total_cost:
+                        type: number
+                        format: float
+                        example: 125.50
+                      currency:
+                        type: string
+                        example: "USD"
+                      by_period:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            date:
+                              type: string
+                              example: "2026-07-12"
+                            amount:
+                              type: number
+                              format: float
+                              example: 4.25
+
+  /admin/ai-monitoring/usage:
+    get:
+      tags:
+        - AI Usage
+      summary: Estadísticas de uso de IA
+      description: |
+        Obtiene estadísticas detalladas del uso de IA.
+
+        **Incluye:**
+        - Total de llamadas por feature (chat, voice, insights, predictions)
+        - Total de tokens (input/output)
+        - Promedio de tokens por llamada
+        - Usuarios más activos
+        - Errores y tasa de error
+      operationId: getAIUsage
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: start_date
+          in: query
+          required: false
+          type: string
+          format: date
+        - name: end_date
+          in: query
+          required: false
+          type: string
+          format: date
+        - name: group_by
+          in: query
+          required: false
+          type: string
+          enum: [feature, user, day]
+          default: feature
+      responses:
+        200:
+          description: Estadísticas obtenidas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  usage:
+                    $ref: '#/definitions/AIUsageStats'
+
+  /admin/ai-monitoring/users:
+    get:
+      tags:
+        - AI Usage
+      summary: Uso por usuario
+      description: Lista los usuarios ordenados por consumo de IA
+      operationId: getAIUsageByUser
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [current_month, last_month, last_7_days]
+          default: current_month
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+      responses:
+        200:
+          description: Lista de usuarios
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/definitions/UserAIUsage'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+  /admin/ai-monitoring/feature-flag:
+    get:
+      tags:
+        - AI Control
+      summary: Obtener estado del feature flag de IA
+      description: Consulta si la funcionalidad de IA está habilitada o deshabilitada
+      operationId: getAIFeatureFlag
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Estado obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  feature_flag:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        example: true
+                      disabled_at:
+                        type: string
+                        format: date-time
+                      disabled_by:
+                        type: string
+                        example: "admin@temis.com"
+                      reason:
+                        type: string
+                        example: "Budget exceeded"
+
+    put:
+      tags:
+        - AI Control
+      summary: Actualizar feature flag de IA
+      description: |
+        Habilita o deshabilita la funcionalidad de IA globalmente.
+
+        **Efecto:**
+        - Si se deshabilita, todas las llamadas a lambda-ai y lambda-voice retornarán 503
+        - Los usuarios verán mensaje: "Servicio temporalmente no disponible"
+      operationId: updateAIFeatureFlag
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - enabled
+            properties:
+              enabled:
+                type: boolean
+                example: false
+              reason:
+                type: string
+                maxLength: 500
+                example: "Monthly budget exceeded"
+      responses:
+        200:
+          description: Feature flag actualizado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+
+  /admin/ai-monitoring/quotas:
+    get:
+      tags:
+        - AI Control
+      summary: Obtener cuotas actuales
+      description: Consulta las cuotas de IA configuradas por plan
+      operationId: getAIQuotas
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Cuotas obtenidas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  quotas:
+                    type: object
+                    properties:
+                      free:
+                        type: integer
+                        example: 0
+                      basic:
+                        type: integer
+                        example: 20
+                      pro:
+                        type: integer
+                        example: 100
+                      premium:
+                        type: integer
+                        example: 500
+
+    put:
+      tags:
+        - AI Control
+      summary: Actualizar cuotas de IA
+      description: |
+        Modifica las cuotas mensuales de IA por plan.
+
+        **Uso:**
+        - Aumentar cuotas si hay presupuesto disponible
+        - Reducir cuotas si se acerca al límite de presupuesto
+        - Ajustes temporales o permanentes
+      operationId: updateAIQuotas
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              free:
+                type: integer
+                minimum: 0
+              basic:
+                type: integer
+                minimum: 0
+              pro:
+                type: integer
+                minimum: 0
+              premium:
+                type: integer
+                minimum: 0
+      responses:
+        200:
+          description: Cuotas actualizadas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+
+  /admin/ai-monitoring/budget:
+    get:
+      tags:
+        - AI Costs
+      summary: Obtener configuración de presupuesto
+      description: Consulta el presupuesto mensual configurado y estado actual
+      operationId: getAIBudget
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Presupuesto obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  budget:
+                    $ref: '#/definitions/AIBudget'
+
+    put:
+      tags:
+        - AI Costs
+      summary: Actualizar presupuesto mensual
+      description: Configura el presupuesto mensual de IA y umbrales de alerta
+      operationId: updateAIBudget
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - monthly_budget
+            properties:
+              monthly_budget:
+                type: number
+                format: float
+                minimum: 0
+                example: 500.00
+              alert_thresholds:
+                type: object
+                properties:
+                  warning:
+                    type: integer
+                    example: 80
+                    description: "Porcentaje para alerta (ej: 80%)"
+                  critical:
+                    type: integer
+                    example: 90
+                  emergency:
+                    type: integer
+                    example: 100
+      responses:
+        200:
+          description: Presupuesto actualizado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+
+  /admin/ai-monitoring/alerts:
+    get:
+      tags:
+        - AI Costs
+      summary: Listar alertas de presupuesto
+      description: Obtiene el historial de alertas generadas
+      operationId: getAIAlerts
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: severity
+          in: query
+          required: false
+          type: string
+          enum: [info, warning, critical, emergency]
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+      responses:
+        200:
+          description: Alertas obtenidas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      $ref: '#/definitions/AIAlert'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Pagination:
+    type: object
+    properties:
+      totalElement:
+        type: integer
+      pageSize:
+        type: integer
+      pageNumber:
+        type: integer
+      hasMoreElements:
+        type: boolean
+
+  AIDashboard:
+    type: object
+    properties:
+      current_month:
+        type: object
+        properties:
+          cost:
+            type: number
+            format: float
+            example: 125.50
+          projected_cost:
+            type: number
+            format: float
+            example: 387.25
+          total_calls:
+            type: integer
+            example: 25000
+          total_tokens_input:
+            type: integer
+            example: 12500000
+          total_tokens_output:
+            type: integer
+            example: 5000000
+      budget_status:
+        type: object
+        properties:
+          monthly_budget:
+            type: number
+            example: 500.00
+          spent:
+            type: number
+            example: 125.50
+          remaining:
+            type: number
+            example: 374.50
+          percentage_used:
+            type: number
+            example: 25.1
+          status:
+            type: string
+            enum: [healthy, warning, critical, exceeded]
+            example: "healthy"
+      by_feature:
+        type: object
+        properties:
+          chat:
+            type: object
+            properties:
+              calls:
+                type: integer
+              cost:
+                type: number
+          voice_tasks:
+            type: object
+            properties:
+              calls:
+                type: integer
+              cost:
+                type: number
+          voice_transactions:
+            type: object
+            properties:
+              calls:
+                type: integer
+              cost:
+                type: number
+          insights:
+            type: object
+            properties:
+              calls:
+                type: integer
+              cost:
+                type: number
+          predictions:
+            type: object
+            properties:
+              calls:
+                type: integer
+              cost:
+                type: number
+      top_users:
+        type: array
+        items:
+          type: object
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            email:
+              type: string
+            calls:
+              type: integer
+            cost:
+              type: number
+
+  AIUsageStats:
+    type: object
+    properties:
+      total_calls:
+        type: integer
+        example: 25000
+      total_tokens:
+        type: object
+        properties:
+          input:
+            type: integer
+            example: 12500000
+          output:
+            type: integer
+            example: 5000000
+      avg_tokens_per_call:
+        type: object
+        properties:
+          input:
+            type: number
+            example: 500
+          output:
+            type: number
+            example: 200
+      by_feature:
+        type: array
+        items:
+          type: object
+          properties:
+            feature:
+              type: string
+              example: "chat"
+            calls:
+              type: integer
+            tokens_input:
+              type: integer
+            tokens_output:
+              type: integer
+            avg_latency_ms:
+              type: integer
+      error_rate:
+        type: number
+        format: float
+        example: 2.5
+        description: "Porcentaje de errores"
+
+  UserAIUsage:
+    type: object
+    properties:
+      user_id:
+        type: string
+        format: uuid
+      email:
+        type: string
+      full_name:
+        type: string
+      plan:
+        type: string
+        example: "Pro"
+      quota_limit:
+        type: integer
+        example: 100
+      quota_used:
+        type: integer
+        example: 45
+      quota_remaining:
+        type: integer
+        example: 55
+      total_calls:
+        type: integer
+        example: 45
+      total_tokens:
+        type: integer
+        example: 45000
+      estimated_cost:
+        type: number
+        format: float
+        example: 0.225
+      last_call_at:
+        type: string
+        format: date-time
+
+  AIBudget:
+    type: object
+    properties:
+      monthly_budget:
+        type: number
+        format: float
+        example: 500.00
+      current_spend:
+        type: number
+        format: float
+        example: 125.50
+      projected_spend:
+        type: number
+        format: float
+        example: 387.25
+      percentage_used:
+        type: number
+        format: float
+        example: 25.1
+      alert_thresholds:
+        type: object
+        properties:
+          warning:
+            type: integer
+            example: 80
+          critical:
+            type: integer
+            example: 90
+          emergency:
+            type: integer
+            example: 100
+      status:
+        type: string
+        enum: [healthy, warning, critical, exceeded]
+        example: "healthy"
+
+  AIAlert:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      severity:
+        type: string
+        enum: [info, warning, critical, emergency]
+        example: "warning"
+      type:
+        type: string
+        enum: [budget_threshold, daily_limit, user_quota, feature_disabled]
+        example: "budget_threshold"
+      message:
+        type: string
+        example: "Budget reached 80% of monthly limit"
+      data:
+        type: object
+        description: "Datos adicionales del alerta"
+      acknowledged:
+        type: boolean
+        example: false
+      acknowledged_by:
+        type: string
+      acknowledged_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

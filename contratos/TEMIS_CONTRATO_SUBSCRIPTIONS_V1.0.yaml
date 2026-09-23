@@ -1,0 +1,1597 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Suscripciones y Pagos
+  description: |
+    API REST para gestión de suscripciones y pagos con Wompi (Bancolombia) en TEMIS.
+
+    **Funcionalidades principales:**
+    - Consulta de planes disponibles (Free, Basic, Pro, Premium)
+    - Checkout con Wompi payment gateway
+    - Gestión de métodos de pago (tarjetas)
+    - Cambio de plan en cualquier momento
+    - Cancelación y reactivación
+    - Historial de pagos e invoices
+    - Alertas de vencimiento (5 días antes)
+    - Auto-renovación con tarjetas guardadas
+
+    **Integración Wompi:**
+    - Payment Gateway: Wompi (Bancolombia, Colombia)
+    - Métodos: Tarjetas de crédito/débito, PSE, Nequi
+    - Comisión: 2.9% + $0.30 por transacción
+    - Webhook para notificaciones de pago
+    - Tokenización de tarjetas (PCI compliant)
+
+    **Comportamiento de acceso:**
+    - Suscripción activa: Acceso completo según plan
+    - Suscripción expirada: Acceso COMPLETO a módulo de pagos, READ-ONLY a otros módulos
+    - Usuario puede reactivar en cualquier momento
+
+    **Autenticación:** Bearer JWT Token (RS256)
+  version: 1.0.0
+  contact:
+    name: Equipo TEMIS
+    email: soporte@temis.app
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: 'Token JWT en formato: Bearer {token}'
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Plans
+    description: Consulta de planes disponibles
+  - name: Subscriptions
+    description: Gestión de suscripciones del usuario
+  - name: Checkout
+    description: Proceso de pago con Wompi
+  - name: Payment Methods
+    description: Gestión de métodos de pago guardados
+  - name: Invoices
+    description: Historial de pagos y facturas
+
+paths:
+  /subscriptions/plans:
+    get:
+      tags:
+        - Plans
+      summary: Listar planes disponibles
+      description: |
+        Obtiene todos los planes de suscripción disponibles con características y precios.
+
+        **Planes disponibles:**
+        - **Free**: Gratis, funcionalidad limitada
+        - **Basic**: Plan básico mensual
+        - **Pro**: Plan profesional mensual/anual
+        - **Premium**: Plan premium mensual/anual con todas las funciones
+      operationId: listPlans
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: billing_cycle
+          in: query
+          required: false
+          type: string
+          enum: [monthly, annual]
+          description: Filtrar por ciclo de facturación
+
+      responses:
+        200:
+          description: Lista de planes obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      $ref: '#/definitions/SubscriptionPlan'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/current:
+    get:
+      tags:
+        - Subscriptions
+      summary: Obtener suscripción actual del usuario
+      description: |
+        Obtiene los detalles de la suscripción activa del usuario.
+
+        **Estados posibles:**
+        - **active**: Suscripción activa
+        - **trial**: Período de prueba
+        - **past_due**: Pago fallido, pendiente de renovación
+        - **expired**: Suscripción expirada (acceso limitado)
+        - **cancelled**: Cancelada por el usuario
+        - **suspended**: Suspendida por admin
+      operationId: getCurrentSubscription
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Suscripción obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  subscription:
+                    $ref: '#/definitions/UserSubscription'
+                  access_status:
+                    type: object
+                    description: "Estado de acceso del usuario"
+                    properties:
+                      can_write:
+                        type: boolean
+                        example: false
+                        description: "false si suscripción expirada"
+                      can_access_payments:
+                        type: boolean
+                        example: true
+                        description: "Siempre true"
+                      days_until_expiry:
+                        type: integer
+                        example: 3
+                        description: "Días hasta que expire (null si ya expiró)"
+                      expiry_alert:
+                        type: boolean
+                        example: true
+                        description: "true si faltan <= 5 días"
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Usuario sin suscripción
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/checkout:
+    post:
+      tags:
+        - Checkout
+      summary: Crear sesión de checkout con Wompi
+      description: |
+        Crea una sesión de pago con Wompi para suscribirse a un plan.
+
+        **Proceso:**
+        1. Valida el plan seleccionado
+        2. Calcula el monto con IVA (19% en Colombia)
+        3. Crea transacción en Wompi
+        4. Retorna URL de checkout y reference
+        5. Usuario es redirigido a Wompi para pagar
+        6. Wompi notifica vía webhook cuando el pago se completa
+
+        **Métodos de pago en Wompi:**
+        - Tarjetas de crédito/débito (Visa, Mastercard)
+        - PSE (débito bancario)
+        - Nequi
+
+        **Importante:**
+        - El usuario puede elegir guardar la tarjeta para auto-renovación
+        - Si guarda tarjeta, se crea un payment_source_id tokenizado
+      operationId: createCheckout
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/CheckoutRequest'
+
+      responses:
+        201:
+          description: Checkout creado exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  checkout:
+                    type: object
+                    properties:
+                      checkout_url:
+                        type: string
+                        format: uri
+                        example: "https://checkout.wompi.co/l/abcd1234"
+                        description: "URL para redirigir al usuario"
+                      transaction_reference:
+                        type: string
+                        example: "TEMIS-20260712-1234567890"
+                        description: "Referencia única de la transacción"
+                      amount_in_cents:
+                        type: integer
+                        example: 4900
+                        description: "Monto en centavos (49.00 COP)"
+                      expires_at:
+                        type: string
+                        format: date-time
+                        example: "2026-07-12T23:59:59Z"
+                        description: "Expiración del link de pago (1 hora)"
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        409:
+          description: Usuario ya tiene suscripción activa
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error al crear checkout en Wompi
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/change-plan:
+    post:
+      tags:
+        - Subscriptions
+      summary: Cambiar plan de suscripción
+      description: |
+        Permite cambiar el plan de suscripción en cualquier momento.
+
+        **Prorrateado:**
+        - Upgrade: Se cobra la diferencia inmediatamente
+        - Downgrade: Se aplica crédito para el siguiente período
+        - Si no hay método de pago guardado, se crea checkout
+
+        **Proceso:**
+        1. Calcula diferencia de precio (prorrateado)
+        2. Si hay upgrade y payment_method guardado: cobra diferencia automáticamente
+        3. Si hay upgrade sin payment_method: crea checkout Wompi
+        4. Si hay downgrade: aplica al siguiente período
+      operationId: changePlan
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - new_plan_id
+            properties:
+              new_plan_id:
+                type: string
+                format: uuid
+                example: "plan-pro-monthly"
+              billing_cycle:
+                type: string
+                enum: [monthly, annual]
+                example: "monthly"
+
+      responses:
+        200:
+          description: Plan cambiado exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  subscription:
+                    $ref: '#/definitions/UserSubscription'
+                  prorated_charge:
+                    type: object
+                    properties:
+                      amount:
+                        type: number
+                        format: float
+                        example: 15.50
+                        description: "Monto a cobrar/creditar"
+                      currency:
+                        type: string
+                        example: "COP"
+                      charged_now:
+                        type: boolean
+                        example: true
+                        description: "true si se cobró inmediatamente"
+                      checkout_url:
+                        type: string
+                        format: uri
+                        description: "URL de checkout si no hay payment_method guardado"
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Plan no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        409:
+          description: Usuario ya está en ese plan
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/cancel:
+    post:
+      tags:
+        - Subscriptions
+      summary: Cancelar suscripción
+      description: |
+        Cancela la suscripción del usuario.
+
+        **Comportamiento:**
+        - La suscripción sigue activa hasta el final del período pagado
+        - No se cobra en la siguiente renovación
+        - Usuario mantiene acceso hasta la fecha de vencimiento
+        - Después de vencimiento: acceso READ-ONLY excepto módulo de pagos
+
+        **Usuario puede reactivar en cualquier momento antes de expiración**
+      operationId: cancelSubscription
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: false
+          schema:
+            type: object
+            properties:
+              cancellation_reason:
+                type: string
+                maxLength: 500
+                example: "Servicio no cumple mis expectativas"
+
+      responses:
+        200:
+          description: Suscripción cancelada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  subscription:
+                    $ref: '#/definitions/UserSubscription'
+                  access_until:
+                    type: string
+                    format: date-time
+                    example: "2026-08-12T23:59:59Z"
+                    description: "Usuario mantiene acceso hasta esta fecha"
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Sin suscripción activa
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/reactivate:
+    post:
+      tags:
+        - Subscriptions
+      summary: Reactivar suscripción cancelada
+      description: |
+        Reactiva una suscripción previamente cancelada.
+
+        **Comportamiento:**
+        - Si la suscripción aún no expiró: reactiva inmediatamente sin cargo
+        - Si ya expiró: crea nuevo checkout para renovar
+        - Si hay payment_method guardado: cobra automáticamente
+      operationId: reactivateSubscription
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Suscripción reactivada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  subscription:
+                    $ref: '#/definitions/UserSubscription'
+                  charged_now:
+                    type: boolean
+                    example: false
+                    description: "true si se cobró inmediatamente"
+                  checkout_url:
+                    type: string
+                    format: uri
+                    description: "URL si necesita pagar"
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Sin suscripción para reactivar
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/payment-methods:
+    get:
+      tags:
+        - Payment Methods
+      summary: Listar métodos de pago guardados
+      description: |
+        Obtiene todos los métodos de pago (tarjetas) guardados del usuario.
+
+        **Importante:**
+        - Solo se almacena el token de Wompi (payment_source_id)
+        - Nunca se almacenan números completos de tarjeta (PCI compliant)
+        - Se muestran últimos 4 dígitos y marca
+      operationId: listPaymentMethods
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Métodos de pago obtenidos exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  payment_methods:
+                    type: array
+                    items:
+                      $ref: '#/definitions/PaymentMethod'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    post:
+      tags:
+        - Payment Methods
+      summary: Agregar método de pago
+      description: |
+        Agrega un nuevo método de pago (tarjeta) tokenizado desde Wompi.
+
+        **Proceso:**
+        1. Usuario tokeniza tarjeta en frontend con Wompi.js
+        2. Frontend envía token a este endpoint
+        3. Backend valida token con Wompi
+        4. Almacena payment_source_id para futuros cobros
+
+        **Nunca se envía el número completo de tarjeta al backend**
+      operationId: addPaymentMethod
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - wompi_payment_source_id
+            properties:
+              wompi_payment_source_id:
+                type: string
+                example: "src_test_1234567890"
+                description: "Token de Wompi para la tarjeta"
+              is_default:
+                type: boolean
+                default: false
+                example: true
+
+      responses:
+        201:
+          description: Método de pago agregado exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  payment_method:
+                    $ref: '#/definitions/PaymentMethod'
+
+        400:
+          description: Token inválido
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        409:
+          description: Tarjeta ya registrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error al validar con Wompi
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/payment-methods/{paymentMethodId}:
+    delete:
+      tags:
+        - Payment Methods
+      summary: Eliminar método de pago
+      description: |
+        Elimina un método de pago guardado.
+
+        **Importante:**
+        - Si es el método por defecto y hay otros, se asigna otro como default
+        - Si es el único método, se elimina sin problema
+        - No afecta suscripciones activas
+      operationId: deletePaymentMethod
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: paymentMethodId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        204:
+          description: Método de pago eliminado exitosamente
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Método de pago no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/invoices:
+    get:
+      tags:
+        - Invoices
+      summary: Listar historial de pagos
+      description: |
+        Obtiene el historial completo de pagos e invoices del usuario.
+
+        **Incluye:**
+        - Pagos exitosos
+        - Pagos fallidos
+        - Reembolsos
+        - Detalles del plan en cada período
+      operationId: listInvoices
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+          minimum: 1
+
+      responses:
+        200:
+          description: Historial obtenido exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+              - pagination
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  invoices:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Invoice'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /subscriptions/invoices/{invoiceId}/download:
+    get:
+      tags:
+        - Invoices
+      summary: Descargar PDF de invoice
+      description: Genera y descarga el PDF de una invoice específica
+      operationId: downloadInvoice
+      produces:
+        - application/pdf
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: invoiceId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: PDF generado exitosamente
+          schema:
+            type: file
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Invoice no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error al generar PDF
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  # =========================
+  # RETRY PAYMENT
+  # =========================
+
+  /subscriptions/retry-payment:
+    post:
+      tags:
+        - Subscriptions
+      summary: Reintentar pago fallido de suscripción
+      description: |
+        Reintenta cobrar una suscripción que falló (status = 'past_due').
+
+        **Casos de uso:**
+        - Auto-renovación falló por fondos insuficientes
+        - Usuario actualizó/agregó tarjeta y quiere reintentar
+        - Error temporal del banco o procesador de pagos
+
+        **Proceso:**
+        1. Verificar que subscription.status = 'past_due'
+        2. Si hay payment_method_id en el body: usar esa tarjeta
+        3. Si no hay payment_method_id: usar default payment method
+        4. Si no hay payment method guardado: retornar checkout_url
+        5. Cobrar con Wompi usando payment_source_id
+        6. Si pago exitoso:
+           - Actualizar status a 'active'
+           - Extender current_period_end (1 mes más)
+           - Crear invoice
+        7. Si pago falla nuevamente:
+           - Mantener status 'past_due'
+           - Retornar error con razón (fondos insuficientes, tarjeta expirada, etc.)
+
+        **Importante:**
+        - Solo funciona si status = 'past_due'
+        - Si status = 'expired', usar /subscriptions/reactivate
+        - Si status = 'cancelled', usar /subscriptions/checkout (nueva suscripción)
+      operationId: retryPayment
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: false
+          schema:
+            type: object
+            properties:
+              paymentMethodId:
+                type: string
+                format: uuid
+                description: ID del método de pago a usar (opcional, usa default si no se especifica)
+                example: "pm-550e8400-e29b-41d4-a716-446655440000"
+
+      responses:
+        200:
+          description: Pago procesado exitosamente
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  subscription:
+                    $ref: '#/definitions/UserSubscription'
+                  transaction:
+                    type: object
+                    properties:
+                      wompiTransactionId:
+                        type: string
+                        example: "123456-1234567890-12345"
+                      amount:
+                        type: number
+                        format: float
+                        example: 49000.00
+                      status:
+                        type: string
+                        example: "APPROVED"
+
+        402:
+          description: Pago rechazado nuevamente
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  paymentFailed:
+                    type: boolean
+                    example: true
+                  reason:
+                    type: string
+                    example: "Fondos insuficientes"
+                  reasonCode:
+                    type: string
+                    example: "INSUFFICIENT_FUNDS"
+                  checkoutUrl:
+                    type: string
+                    format: uri
+                    description: URL para intentar con otro método de pago
+                  retryAllowed:
+                    type: boolean
+                    example: true
+                    description: Si se permite reintentar (false si tarjeta bloqueada permanentemente)
+
+        404:
+          description: Suscripción no encontrada o no está en estado past_due
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: No hay método de pago guardado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "No payment method available"
+                  checkoutUrl:
+                    type: string
+                    format: uri
+                    description: URL para agregar método de pago y proceder
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  # =========================
+  # SUBSCRIPTION ALERTS
+  # =========================
+
+  /subscriptions/alerts:
+    get:
+      tags:
+        - Subscriptions
+      summary: Obtener alertas de suscripción del usuario
+      description: |
+        Lista las alertas activas relacionadas con la suscripción del usuario.
+
+        **Tipos de alertas:**
+
+        1. **expiring_soon** (warning):
+           - Suscripción expira en 5 días o menos
+           - Mensaje: "Tu suscripción expira en X días"
+           - Acción: Renovar ahora
+
+        2. **expired** (critical):
+           - Suscripción ya expiró
+           - Acceso READ-ONLY (excepto módulo de pagos)
+           - Mensaje: "Tu suscripción ha expirado"
+           - Acción: Reactivar suscripción
+
+        3. **payment_failed** (critical):
+           - Último intento de pago falló (status = past_due)
+           - Mensaje: "Fallo en renovación automática"
+           - Acción: Reintentar pago o actualizar método de pago
+
+        4. **trial_ending** (info):
+           - Trial termina en 3 días o menos
+           - Mensaje: "Tu prueba gratis termina en X días"
+           - Acción: Suscribirse a un plan
+
+        5. **no_payment_method** (warning):
+           - Tiene suscripción activa pero sin método de pago guardado
+           - No se renovará automáticamente
+           - Mensaje: "Agrega método de pago para renovación automática"
+
+        **Uso:**
+        - Frontend consulta este endpoint al cargar la app
+        - Muestra banner/notificación según severity
+        - Permite al usuario tomar acción inmediata
+      operationId: getSubscriptionAlerts
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Alertas obtenidas exitosamente
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [expiring_soon, expired, payment_failed, trial_ending, no_payment_method]
+                          example: "expiring_soon"
+                        severity:
+                          type: string
+                          enum: [info, warning, critical]
+                          example: "warning"
+                        title:
+                          type: string
+                          example: "Suscripción por vencer"
+                        message:
+                          type: string
+                          example: "Tu suscripción Pro expira en 3 días"
+                        daysUntilExpiry:
+                          type: integer
+                          example: 3
+                          description: Solo para expiring_soon y trial_ending
+                        actionUrl:
+                          type: string
+                          example: "/subscriptions/checkout"
+                          description: Ruta del frontend para acción
+                        actionLabel:
+                          type: string
+                          example: "Renovar ahora"
+                        dismissible:
+                          type: boolean
+                          example: false
+                          description: Si el usuario puede descartar la alerta
+                        createdAt:
+                          type: string
+                          format: date-time
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Usuario sin suscripción
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    required:
+      - httpStatusCode
+      - httpStatusDesc
+      - messageUuid
+      - requestDatetime
+      - requestAppId
+    properties:
+      httpStatusCode:
+        type: integer
+        example: 200
+      httpStatusDesc:
+        type: string
+        example: "OK"
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    required:
+      - responseCode
+      - responseMessage
+    properties:
+      responseCode:
+        type: string
+        example: "0000"
+      responseMessage:
+        type: string
+        example: "Success"
+      responseDetail:
+        type: string
+
+  Pagination:
+    type: object
+    required:
+      - totalElement
+      - pageSize
+      - pageNumber
+      - hasMoreElements
+    properties:
+      totalElement:
+        type: integer
+      pageSize:
+        type: integer
+      pageNumber:
+        type: integer
+      hasMoreElements:
+        type: boolean
+
+  SubscriptionPlan:
+    type: object
+    required:
+      - id
+      - name
+      - billing_cycle
+      - price
+      - currency
+      - features
+    properties:
+      id:
+        type: string
+        example: "plan-pro-monthly"
+      name:
+        type: string
+        example: "Pro"
+      description:
+        type: string
+        example: "Plan profesional con funciones avanzadas"
+      billing_cycle:
+        type: string
+        enum: [monthly, annual]
+        example: "monthly"
+      price:
+        type: number
+        format: float
+        example: 49000.00
+      currency:
+        type: string
+        example: "COP"
+      discount_annual:
+        type: integer
+        example: 20
+        description: "Porcentaje de descuento en plan anual"
+      features:
+        type: object
+        properties:
+          max_tasks:
+            type: integer
+            example: 10000
+          max_passwords:
+            type: integer
+            example: 1000
+          max_transactions:
+            type: integer
+            example: 10000
+          ai_quota_monthly:
+            type: integer
+            example: 100
+            description: "Llamadas a IA por mes"
+          voice_input:
+            type: boolean
+            example: true
+          advanced_reports:
+            type: boolean
+            example: true
+          priority_support:
+            type: boolean
+            example: true
+          custom_categories:
+            type: boolean
+            example: true
+      is_popular:
+        type: boolean
+        example: true
+
+  UserSubscription:
+    type: object
+    required:
+      - id
+      - organization_id
+      - user_id
+      - plan_id
+      - status
+      - current_period_start
+      - current_period_end
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      plan_id:
+        type: string
+        example: "plan-pro-monthly"
+      plan_name:
+        type: string
+        example: "Pro"
+      status:
+        type: string
+        enum: [active, trial, past_due, expired, cancelled, suspended]
+        example: "active"
+      billing_cycle:
+        type: string
+        enum: [monthly, annual]
+        example: "monthly"
+      amount:
+        type: number
+        format: float
+        example: 49000.00
+      currency:
+        type: string
+        example: "COP"
+      current_period_start:
+        type: string
+        format: date-time
+        example: "2026-07-12T00:00:00Z"
+      current_period_end:
+        type: string
+        format: date-time
+        example: "2026-08-12T23:59:59Z"
+      cancel_at_period_end:
+        type: boolean
+        example: false
+        description: "true si está cancelada pero aún activa"
+      cancelled_at:
+        type: string
+        format: date-time
+      trial_end:
+        type: string
+        format: date-time
+      auto_renew:
+        type: boolean
+        example: true
+        description: "true si hay payment_method guardado"
+      default_payment_method_id:
+        type: string
+        format: uuid
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  CheckoutRequest:
+    type: object
+    required:
+      - plan_id
+      - billing_cycle
+    properties:
+      plan_id:
+        type: string
+        example: "plan-pro-monthly"
+      billing_cycle:
+        type: string
+        enum: [monthly, annual]
+        example: "monthly"
+      save_payment_method:
+        type: boolean
+        default: false
+        example: true
+        description: "Si true, permite auto-renovación"
+      return_url:
+        type: string
+        format: uri
+        example: "https://app.temis.com/subscriptions/success"
+        description: "URL de retorno después del pago"
+      cancel_url:
+        type: string
+        format: uri
+        example: "https://app.temis.com/subscriptions/cancel"
+        description: "URL si cancela el pago"
+
+  PaymentMethod:
+    type: object
+    required:
+      - id
+      - organization_id
+      - user_id
+      - last_four_digits
+      - card_brand
+      - is_default
+    properties:
+      id:
+        type: string
+        format: uuid
+        example: "pm-550e8400-e29b-41d4-a716-446655440000"
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      wompi_payment_source_id:
+        type: string
+        example: "src_prod_card_1234567890"
+        description: "Token de Wompi (NO se expone en GET)"
+      card_brand:
+        type: string
+        example: "VISA"
+        enum: [VISA, MASTERCARD, AMEX, DINERS]
+      last_four_digits:
+        type: string
+        example: "4242"
+      expiry_month:
+        type: integer
+        example: 12
+      expiry_year:
+        type: integer
+        example: 2028
+      cardholder_name:
+        type: string
+        example: "JUAN PEREZ"
+      is_default:
+        type: boolean
+        example: true
+      is_expired:
+        type: boolean
+        example: false
+      created_at:
+        type: string
+        format: date-time
+
+  Invoice:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      invoice_number:
+        type: string
+        example: "INV-2026-07-0001234"
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      subscription_id:
+        type: string
+        format: uuid
+      plan_name:
+        type: string
+        example: "Pro Monthly"
+      amount:
+        type: number
+        format: float
+        example: 49000.00
+      tax:
+        type: number
+        format: float
+        example: 9310.00
+        description: "IVA 19%"
+      total:
+        type: number
+        format: float
+        example: 58310.00
+      currency:
+        type: string
+        example: "COP"
+      status:
+        type: string
+        enum: [pending, paid, failed, refunded]
+        example: "paid"
+      payment_method:
+        type: string
+        example: "VISA ****4242"
+      wompi_transaction_id:
+        type: string
+        example: "123456-1234567890-12345"
+      billing_period_start:
+        type: string
+        format: date
+        example: "2026-07-12"
+      billing_period_end:
+        type: string
+        format: date
+        example: "2026-08-12"
+      paid_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+      pdf_url:
+        type: string
+        format: uri
+        example: "https://api.temis.app/v1/subscriptions/invoices/{id}/download"
+
+  ErrorResponse:
+    type: object
+    required:
+      - headers
+      - messageResponse
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

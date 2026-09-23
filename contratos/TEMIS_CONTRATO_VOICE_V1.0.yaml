@@ -1,0 +1,686 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Entrada por Voz
+  description: |
+    API REST para procesamiento de entrada por voz en TEMIS.
+
+    **Proceso:**
+    1. Cliente graba audio y lo envía en base64
+    2. Amazon Transcribe convierte voz a texto
+    3. Amazon Bedrock (Claude 3.5 Sonnet) extrae datos estructurados
+    4. Se crea el recurso correspondiente (tarea o transacción)
+
+    **Servicios AWS:**
+    - Amazon Transcribe: Speech-to-text
+    - Amazon Bedrock: IA para interpretar texto
+    - S3: Almacenamiento temporal de audio
+
+    **Limitaciones de audio:**
+    - Duración máxima: 5 minutos (300 segundos)
+    - Tamaño máximo: 10 MB
+    - Formatos: MP3, WAV, M4A, OGG
+    - Idiomas: Español (es-ES, es-CO), Inglés (en-US)
+    - Requiere cuota de IA disponible según plan
+
+    **Validación de archivos:**
+
+    1. **Validación de tamaño (backend):**
+       - Cliente envía audio en base64
+       - Backend decodifica y calcula tamaño real
+       - Si > 10 MB → Retorna `413 Payload Too Large`
+
+    2. **Validación de duración (después de transcripción):**
+       - AWS Transcribe detecta duración durante procesamiento
+       - Si > 5 minutos → Elimina de S3 y retorna `422 Unprocessable Entity`
+
+    **Response 413 (Payload Too Large):**
+    ```json
+    {
+      "headers": {
+        "httpStatusCode": 413,
+        "httpStatusDesc": "Payload Too Large"
+      },
+      "messageResponse": {
+        "responseCode": "0413",
+        "responseMessage": "File too large",
+        "responseDetail": "El archivo de audio excede el tamaño máximo permitido"
+      },
+      "errors": [{
+        "errorCode": "FILE_TOO_LARGE",
+        "errorDetail": "Max: 10485760 bytes (10 MB), Actual: 15728640 bytes (15 MB)"
+      }]
+    }
+    ```
+
+    **Response 422 (Duration exceeded):**
+    ```json
+    {
+      "headers": {
+        "httpStatusCode": 422,
+        "httpStatusDesc": "Unprocessable Entity"
+      },
+      "messageResponse": {
+        "responseCode": "0422",
+        "responseMessage": "Duration exceeded",
+        "responseDetail": "La duración del audio excede el máximo permitido"
+      },
+      "errors": [{
+        "errorCode": "DURATION_TOO_LONG",
+        "errorDetail": "Max: 300 seconds (5 min), Detected: 420 seconds (7 min)"
+      }]
+    }
+    ```
+
+    **Retry de audios fallidos:**
+    - Endpoint: POST /voice/retry/{voiceInputId}
+    - Máximo 3 reintentos por audio
+    - Consume cuota de IA
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Voice Tasks
+    description: Crear tareas por voz
+  - name: Voice Transactions
+    description: Crear transacciones por voz
+  - name: Voice History
+    description: Historial de entradas por voz
+
+paths:
+  /voice/tasks:
+    post:
+      tags:
+        - Voice Tasks
+      summary: Crear tarea por voz
+      description: |
+        Procesa audio de voz para crear una tarea.
+
+        **Ejemplo:**
+        Usuario dice: "Recordar revisar el correo mañana a las 9 AM, es urgente"
+
+        **IA extrae:**
+        - title: "Revisar el correo"
+        - due_date: mañana 09:00
+        - priority: high (por "urgente")
+        - reminder: 09:00
+      operationId: createTaskVoice
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/VoiceTaskRequest'
+      responses:
+        201:
+          description: Tarea creada por voz
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+                  voice_input:
+                    $ref: '#/definitions/VoiceInput'
+        400:
+          description: Audio inválido o no procesable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        422:
+          description: Cuota de IA excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /voice/transactions:
+    post:
+      tags:
+        - Voice Transactions
+      summary: Crear transacción por voz
+      description: |
+        Procesa audio para crear una transacción financiera.
+
+        **Ejemplo:**
+        Usuario dice: "Gasté 50 dólares en restaurante ayer por la noche"
+
+        **IA extrae:**
+        - type: expense
+        - amount: 50.00
+        - currency: USD
+        - category: Restaurantes
+        - date: ayer 20:00
+        - description: "Restaurante"
+      operationId: createTransactionVoice
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/VoiceTransactionRequest'
+      responses:
+        201:
+          description: Transacción creada por voz
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+                  voice_input:
+                    $ref: '#/definitions/VoiceInput'
+        400:
+          description: Audio inválido
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        422:
+          description: Cuota de IA excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /voice/history:
+    get:
+      tags:
+        - Voice History
+      summary: Obtener historial de entradas por voz
+      description: Lista todas las entradas por voz del usuario
+      operationId: getVoiceHistory
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: input_type
+          in: query
+          required: false
+          type: string
+          enum: [task, transaction]
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+      responses:
+        200:
+          description: Historial obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  voice_inputs:
+                    type: array
+                    items:
+                      $ref: '#/definitions/VoiceHistoryEntry'
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+  /voice/quota:
+    get:
+      tags:
+        - Voice History
+      summary: Obtener cuota de IA disponible
+      description: Muestra el uso actual y límite de la cuota de IA del usuario
+      operationId: getVoiceQuota
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Cuota obtenida
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  quota:
+                    type: object
+                    properties:
+                      plan_name:
+                        type: string
+                        example: "Pro"
+                      monthly_limit:
+                        type: integer
+                        example: 100
+                      used_this_month:
+                        type: integer
+                        example: 45
+                      remaining:
+                        type: integer
+                        example: 55
+                      resets_at:
+                        type: string
+                        format: date-time
+                        example: "2026-08-01T00:00:00Z"
+
+  # =========================
+  # RETRY VOICE INPUT
+  # =========================
+
+  /voice/retry/{voiceInputId}:
+    post:
+      tags:
+        - Voice History
+      summary: Reintentar procesamiento de audio fallido
+      description: |
+        Reintenta procesar un audio que falló en transcripción o interpretación con IA.
+
+        **Casos de uso:**
+        - Error temporal de AWS Transcribe (servicio caído)
+        - Error temporal de Amazon Bedrock (throttling, timeout)
+        - Audio con mucho ruido que no se pudo transcribir
+        - Usuario editó/mejoró la calidad del audio y quiere reintentarlo
+
+        **Proceso:**
+        1. Verificar que voice_input.success = false (falló previamente)
+        2. Verificar retry_count < 3 (máximo 3 reintentos)
+        3. Obtener archivo de S3 (aún está guardado)
+        4. Reintentar transcripción con AWS Transcribe
+        5. Si transcripción OK, procesar con Amazon Bedrock
+        6. Crear tarea/transacción si procesamiento exitoso
+        7. Incrementar retry_count
+        8. Actualizar voice_input.success
+
+        **Límites:**
+        - Máximo 3 reintentos por audio
+        - Audio debe existir en S3 (no eliminado)
+        - Solo para audios con success=false
+
+        **Consume cuota de IA:**
+        - Cada retry consume 1 uso de cuota mensual
+        - Verificar con check_ai_quota() antes de procesar
+      operationId: retryVoiceInput
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: voiceInputId
+          in: path
+          required: true
+          type: string
+          format: uuid
+          description: ID del voice input fallido a reintentar
+
+      responses:
+        201:
+          description: Procesamiento exitoso, tarea/transacción creada
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  task:
+                    $ref: '#/definitions/Task'
+                    description: Tarea creada (si input_type=task)
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+                    description: Transacción creada (si input_type=transaction)
+                  voiceInput:
+                    $ref: '#/definitions/VoiceInput'
+                    description: Voice input actualizado con success=true
+
+        400:
+          description: Límite de reintentos excedido (3 reintentos) o audio ya procesado exitosamente
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+            example:
+              headers:
+                httpStatusCode: 400
+                httpStatusDesc: "Bad Request"
+              messageResponse:
+                responseCode: "0400"
+                responseMessage: "Retry limit exceeded"
+                responseDetail: "Este audio ya fue reintentado 3 veces. No se permiten más reintentos."
+              errors:
+                - errorCode: "RETRY_LIMIT_EXCEEDED"
+                  errorDetail: "retry_count: 3, max_retries: 3"
+
+        404:
+          description: Voice input no encontrado o archivo eliminado de S3
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Voice input no está en estado 'failed' o cuota de IA excedida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Fallo nuevamente en transcripción/procesamiento
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: "Transcription failed: Audio quality too low"
+                  retryCount:
+                    type: integer
+                    example: 2
+                  retriesRemaining:
+                    type: integer
+                    example: 1
+                    description: Reintentos que quedan (3 - retry_count)
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Pagination:
+    type: object
+    properties:
+      totalElement:
+        type: integer
+      pageSize:
+        type: integer
+      pageNumber:
+        type: integer
+      hasMoreElements:
+        type: boolean
+
+  VoiceTaskRequest:
+    type: object
+    required:
+      - audio_data
+      - audio_format
+    properties:
+      audio_data:
+        type: string
+        format: byte
+        description: "Audio en base64"
+      audio_format:
+        type: string
+        enum: [mp3, wav, m4a, ogg]
+        example: "mp3"
+      language_code:
+        type: string
+        enum: [es-ES, es-CO, en-US]
+        default: "es-CO"
+        example: "es-CO"
+
+  VoiceTransactionRequest:
+    type: object
+    required:
+      - audio_data
+      - audio_format
+    properties:
+      audio_data:
+        type: string
+        format: byte
+        description: "Audio en base64"
+      audio_format:
+        type: string
+        enum: [mp3, wav, m4a, ogg]
+        example: "mp3"
+      language_code:
+        type: string
+        enum: [es-ES, es-CO, en-US]
+        default: "es-CO"
+      account_id:
+        type: string
+        format: uuid
+        description: "Cuenta por defecto (opcional)"
+
+  VoiceInput:
+    type: object
+    properties:
+      transcription:
+        type: string
+        example: "Gasté 50 dólares en restaurante ayer por la noche"
+      confidence:
+        type: number
+        format: float
+        example: 0.95
+        description: "Confianza de Amazon Transcribe (0-1)"
+      ai_interpretation:
+        type: string
+        example: "Gasto de 50 USD en categoría Restaurantes con fecha 2026-07-11 20:00"
+      processing_time_ms:
+        type: integer
+        example: 2340
+        description: "Tiempo total de procesamiento en ms"
+      tokens_used:
+        type: object
+        properties:
+          input:
+            type: integer
+            example: 120
+          output:
+            type: integer
+            example: 80
+
+  VoiceHistoryEntry:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      input_type:
+        type: string
+        enum: [task, transaction]
+        example: "task"
+      transcription:
+        type: string
+        example: "Recordar revisar el correo mañana"
+      ai_interpretation:
+        type: string
+      resource_id:
+        type: string
+        format: uuid
+        description: "ID de la tarea o transacción creada"
+      resource_title:
+        type: string
+        example: "Revisar el correo"
+      success:
+        type: boolean
+        example: true
+      error_message:
+        type: string
+      created_at:
+        type: string
+        format: date-time
+
+  Task:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      title:
+        type: string
+      description:
+        type: string
+      priority:
+        type: string
+        enum: [low, medium, high, urgent]
+      due_date:
+        type: string
+        format: date-time
+      voice_input_id:
+        type: string
+        format: uuid
+
+  Transaction:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      transaction_type:
+        type: string
+        enum: [income, expense, transfer]
+      amount:
+        type: number
+        format: float
+      currency:
+        type: string
+      description:
+        type: string
+      transaction_date:
+        type: string
+        format: date-time
+      voice_input_id:
+        type: string
+        format: uuid
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

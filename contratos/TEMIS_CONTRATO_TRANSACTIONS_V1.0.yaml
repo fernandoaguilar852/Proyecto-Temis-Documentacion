@@ -1,0 +1,1637 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Transacciones Financieras
+  description: |
+    API REST para gestión de transacciones financieras en la plataforma TEMIS.
+
+    **Funcionalidades principales:**
+    - Registro de ingresos y gastos
+    - Transferencias entre cuentas
+    - Categorización y etiquetado
+    - Adjuntar comprobantes (imágenes, PDFs)
+    - Entrada por voz con IA
+    - Dashboard financiero con gráficas
+    - Reportes y resúmenes por período
+    - Análisis de gastos por categoría
+    - Integración con presupuestos
+    - Detección de gastos recurrentes
+
+    **Tipos de transacciones:**
+    - **income**: Ingresos
+    - **expense**: Gastos
+    - **transfer**: Transferencias entre cuentas
+
+    **Autenticación:** Bearer JWT Token (RS256)
+  version: 1.0.0
+  contact:
+    name: Equipo TEMIS
+    email: soporte@temis.app
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+    description: 'Token JWT en formato: Bearer {token}'
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Transacciones
+    description: Operaciones CRUD sobre transacciones
+  - name: Dashboard
+    description: Reportes y visualizaciones financieras
+  - name: Voice
+    description: Entrada por voz con IA
+
+paths:
+  /transactions:
+    get:
+      tags:
+        - Transacciones
+      summary: Listar transacciones del usuario
+      description: |
+        Obtiene todas las transacciones del usuario con filtros opcionales y paginación.
+
+        **Filtros disponibles:**
+        - Tipo (income, expense, transfer)
+        - Rango de fechas
+        - Rango de montos
+        - Categoría
+        - Etiquetas
+        - Cuenta
+        - Búsqueda por descripción
+      operationId: listTransactions
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: X-Device-ID
+          in: header
+          required: false
+          type: string
+
+        - name: transaction_type
+          in: query
+          required: false
+          type: string
+          enum: [income, expense, transfer]
+          description: Filtrar por tipo de transacción
+
+        - name: category_id
+          in: query
+          required: false
+          type: string
+          format: uuid
+          description: Filtrar por categoría
+
+        - name: tag_ids
+          in: query
+          required: false
+          type: array
+          items:
+            type: string
+            format: uuid
+          collectionFormat: csv
+          description: Filtrar por etiquetas
+
+        - name: account_id
+          in: query
+          required: false
+          type: string
+          format: uuid
+          description: Filtrar por cuenta
+
+        - name: date_from
+          in: query
+          required: false
+          type: string
+          format: date
+          description: Fecha desde (YYYY-MM-DD)
+
+        - name: date_to
+          in: query
+          required: false
+          type: string
+          format: date
+          description: Fecha hasta (YYYY-MM-DD)
+
+        - name: amount_min
+          in: query
+          required: false
+          type: number
+          format: float
+          description: Monto mínimo
+
+        - name: amount_max
+          in: query
+          required: false
+          type: number
+          format: float
+          description: Monto máximo
+
+        - name: search
+          in: query
+          required: false
+          type: string
+          description: Buscar en descripción y notas
+
+        - name: pageSize
+          in: query
+          required: false
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 100
+
+        - name: pageNumber
+          in: query
+          required: false
+          type: integer
+          default: 1
+          minimum: 1
+
+        - name: sortBy
+          in: query
+          required: false
+          type: string
+          enum: [transaction_date, amount, created_at]
+          default: transaction_date
+
+        - name: sortOrder
+          in: query
+          required: false
+          type: string
+          enum: [asc, desc]
+          default: desc
+
+      responses:
+        200:
+          description: Lista de transacciones obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+              - pagination
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Transaction'
+                  summary:
+                    type: object
+                    description: "Resumen de la página actual"
+                    properties:
+                      total_income:
+                        type: number
+                        format: float
+                        example: 5000.00
+                      total_expense:
+                        type: number
+                        format: float
+                        example: 3200.00
+                      net_balance:
+                        type: number
+                        format: float
+                        example: 1800.00
+              pagination:
+                $ref: '#/definitions/Pagination'
+
+        400:
+          description: Parámetros inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    post:
+      tags:
+        - Transacciones
+      summary: Crear nueva transacción
+      description: |
+        Crea una nueva transacción financiera.
+
+        **Proceso:**
+        1. Valida que la cuenta pertenezca al usuario
+        2. Valida presupuesto si aplica
+        3. Crea la transacción
+        4. Actualiza balance de la cuenta
+        5. Actualiza estadísticas de presupuesto si corresponde
+      operationId: createTransaction
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: X-Device-ID
+          in: header
+          required: false
+          type: string
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TransactionCreateRequest'
+
+      responses:
+        201:
+          description: Transacción creada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+                  budget_alert:
+                    type: object
+                    description: "Alerta si se excede presupuesto"
+                    properties:
+                      budget_exceeded:
+                        type: boolean
+                        example: true
+                      budget_name:
+                        type: string
+                        example: "Presupuesto Restaurantes"
+                      spent:
+                        type: number
+                        example: 550.00
+                      limit:
+                        type: number
+                        example: 500.00
+                      percentage:
+                        type: number
+                        example: 110.0
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida (suscripción expirada)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /transactions/{transactionId}:
+    get:
+      tags:
+        - Transacciones
+      summary: Obtener transacción por ID
+      description: Obtiene los detalles completos de una transacción
+      operationId: getTransactionById
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: transactionId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        200:
+          description: Transacción obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Transacción no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Transacciones
+      summary: Actualizar transacción completa
+      description: |
+        Actualiza todos los campos de una transacción existente.
+
+        **Importante:**
+        - Recalcula balance de cuenta si cambia el monto
+        - Recalcula presupuestos si cambia categoría o monto
+      operationId: updateTransaction
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: transactionId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TransactionUpdateRequest'
+
+      responses:
+        200:
+          description: Transacción actualizada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Transacción no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    patch:
+      tags:
+        - Transacciones
+      summary: Actualizar campos específicos
+      description: Actualiza solo los campos proporcionados
+      operationId: patchTransaction
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: transactionId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/TransactionPatchRequest'
+
+      responses:
+        200:
+          description: Transacción actualizada exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Transacción no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Transacciones
+      summary: Eliminar transacción
+      description: |
+        Elimina una transacción (soft delete).
+
+        **Proceso:**
+        1. Marca la transacción como eliminada
+        2. Recalcula balance de la cuenta
+        3. Recalcula presupuestos si aplica
+      operationId: deleteTransaction
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: transactionId
+          in: path
+          required: true
+          type: string
+          format: uuid
+
+      responses:
+        204:
+          description: Transacción eliminada exitosamente
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin permisos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        404:
+          description: Transacción no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Operación no permitida
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /transactions/dashboard:
+    get:
+      tags:
+        - Dashboard
+      summary: Obtener dashboard financiero
+      description: |
+        Obtiene un resumen completo de la situación financiera del usuario:
+        - Balance actual de todas las cuentas
+        - Ingresos y gastos del período
+        - Gráficas de evolución temporal
+        - Top categorías de gastos
+        - Transacciones recientes
+        - Proyección de balance
+        - Alertas de presupuesto
+      operationId: getDashboard
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [week, month, quarter, year]
+          default: month
+          description: Período para el dashboard
+
+      responses:
+        200:
+          description: Dashboard obtenido exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  dashboard:
+                    $ref: '#/definitions/Dashboard'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /transactions/summary:
+    get:
+      tags:
+        - Dashboard
+      summary: Obtener resumen por período
+      description: |
+        Obtiene un resumen agregado de transacciones por período de tiempo.
+
+        **Retorna:**
+        - Total de ingresos
+        - Total de gastos
+        - Balance neto
+        - Promedio diario
+        - Cantidad de transacciones
+      operationId: getTransactionSummary
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: date_from
+          in: query
+          required: true
+          type: string
+          format: date
+          description: Fecha desde (YYYY-MM-DD)
+
+        - name: date_to
+          in: query
+          required: true
+          type: string
+          format: date
+          description: Fecha hasta (YYYY-MM-DD)
+
+        - name: group_by
+          in: query
+          required: false
+          type: string
+          enum: [day, week, month, year]
+          default: month
+          description: Agrupar por período
+
+      responses:
+        200:
+          description: Resumen obtenido exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  summary:
+                    $ref: '#/definitions/TransactionSummary'
+
+        400:
+          description: Parámetros inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /transactions/by-category:
+    get:
+      tags:
+        - Dashboard
+      summary: Obtener transacciones agrupadas por categoría
+      description: |
+        Obtiene un resumen de gastos e ingresos agrupados por categoría.
+
+        **Útil para:**
+        - Gráficas de pie/donut
+        - Análisis de gastos por categoría
+        - Identificar áreas de mayor gasto
+      operationId: getTransactionsByCategory
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: date_from
+          in: query
+          required: false
+          type: string
+          format: date
+
+        - name: date_to
+          in: query
+          required: false
+          type: string
+          format: date
+
+        - name: transaction_type
+          in: query
+          required: false
+          type: string
+          enum: [income, expense]
+          default: expense
+          description: Tipo de transacción a agrupar
+
+      responses:
+        200:
+          description: Agrupación por categoría obtenida exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  by_category:
+                    type: array
+                    items:
+                      $ref: '#/definitions/CategorySummary'
+                  total_amount:
+                    type: number
+                    format: float
+                    example: 3200.00
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error interno
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /transactions/voice:
+    post:
+      tags:
+        - Voice
+      summary: Crear transacción por voz
+      description: |
+        Procesa audio de voz para crear una transacción usando Amazon Transcribe + Bedrock.
+
+        **Proceso:**
+        1. Recibe archivo de audio (base64)
+        2. Transcribe con Amazon Transcribe
+        3. Usa Claude 3.5 Sonnet (Bedrock) para extraer datos estructurados
+        4. Crea la transacción automáticamente
+        5. Retorna transacción creada y transcripción
+
+        **Ejemplo de voz:**
+        "Gasté 50 dólares en restaurante el día de ayer"
+
+        **IA extrae:**
+        - Tipo: expense
+        - Monto: 50.00
+        - Categoría: Restaurantes
+        - Fecha: ayer (calculada)
+      operationId: createTransactionVoice
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - audio_data
+              - audio_format
+            properties:
+              audio_data:
+                type: string
+                format: byte
+                description: "Audio en base64"
+              audio_format:
+                type: string
+                enum: [mp3, wav, m4a, ogg]
+                example: "mp3"
+              account_id:
+                type: string
+                format: uuid
+                description: "Cuenta por defecto (opcional)"
+
+      responses:
+        201:
+          description: Transacción creada por voz exitosamente
+          schema:
+            type: object
+            required:
+              - headers
+              - messageResponse
+              - data
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  transaction:
+                    $ref: '#/definitions/Transaction'
+                  voice_input:
+                    type: object
+                    properties:
+                      transcription:
+                        type: string
+                        example: "Gasté 50 dólares en restaurante el día de ayer"
+                      confidence:
+                        type: number
+                        format: float
+                        example: 0.95
+                      ai_interpretation:
+                        type: string
+                        example: "Gasto de 50 USD en categoría Restaurantes con fecha 2026-07-11"
+
+        400:
+          description: Audio inválido o no procesable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Cuota de IA excedida o suscripción expirada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error en procesamiento de voz o IA
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  # =========================
+  # IMPORT TRANSACTIONS FROM CSV
+  # =========================
+
+  /transactions/import:
+    post:
+      tags:
+        - Transacciones
+      summary: Importar transacciones desde archivo CSV
+      description: |
+        Permite importar múltiples transacciones desde un archivo CSV.
+
+        **Formato CSV esperado:**
+        ```csv
+        fecha,tipo,monto,descripcion,categoria,cuenta
+        2026-07-15,expense,50000,Supermercado,Alimentos,Efectivo
+        2026-07-14,income,200000,Salario,Ingresos,Banco
+        ```
+
+        **Columnas requeridas:**
+        - fecha (YYYY-MM-DD)
+        - tipo (income, expense, transfer)
+        - monto (número decimal, sin símbolos)
+
+        **Columnas opcionales:**
+        - descripcion
+        - categoria (se busca por nombre o se crea si no existe)
+        - cuenta (se busca por nombre o usa cuenta por defecto)
+        - moneda (default: COP)
+
+        **Proceso de importación:**
+        1. Validar formato CSV
+        2. Validar que cada fila tenga datos válidos
+        3. Retornar preview con transacciones a importar + errores
+        4. Usuario confirma importación
+        5. Se crean las transacciones válidas
+
+        **Límites:**
+        - Máximo 500 transacciones por archivo
+        - Tamaño máximo: 2 MB
+        - Solo archivos .csv
+
+        **Validaciones:**
+        - Fecha debe ser válida y no futura
+        - Tipo debe ser income, expense o transfer
+        - Monto debe ser > 0
+        - Si tipo=transfer, se requiere "cuenta_destino"
+      operationId: importTransactions
+      consumes:
+        - multipart/form-data
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+
+        - name: file
+          in: formData
+          required: true
+          type: file
+          description: Archivo CSV con transacciones
+
+        - name: confirm
+          in: formData
+          required: false
+          type: boolean
+          default: false
+          description: Si true, ejecuta importación. Si false, retorna solo preview.
+
+      responses:
+        200:
+          description: Preview o resultado de importación
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  preview:
+                    type: boolean
+                    example: true
+                    description: true si es preview, false si se ejecutó importación
+                  totalRows:
+                    type: integer
+                    example: 150
+                  validRows:
+                    type: integer
+                    example: 145
+                  invalidRows:
+                    type: integer
+                    example: 5
+                  transactions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row:
+                          type: integer
+                        valid:
+                          type: boolean
+                        data:
+                          $ref: '#/definitions/Transaction'
+                        error:
+                          type: string
+                          description: Solo si valid=false
+                  summary:
+                    type: object
+                    properties:
+                      totalAmount:
+                        type: number
+                        format: float
+                      incomeAmount:
+                        type: number
+                      expenseAmount:
+                        type: number
+                      transactionsCreated:
+                        type: integer
+                        description: Solo si confirm=true
+
+        400:
+          description: Archivo inválido o formato incorrecto
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        413:
+          description: Archivo muy grande (> 2 MB)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        422:
+          description: Más de 500 transacciones en el archivo
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+        500:
+          description: Error en procesamiento
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    required:
+      - httpStatusCode
+      - httpStatusDesc
+      - messageUuid
+      - requestDatetime
+      - requestAppId
+    properties:
+      httpStatusCode:
+        type: integer
+        example: 200
+      httpStatusDesc:
+        type: string
+        example: "OK"
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    required:
+      - responseCode
+      - responseMessage
+    properties:
+      responseCode:
+        type: string
+        example: "0000"
+      responseMessage:
+        type: string
+        example: "Success"
+      responseDetail:
+        type: string
+
+  Pagination:
+    type: object
+    required:
+      - totalElement
+      - pageSize
+      - pageNumber
+      - hasMoreElements
+    properties:
+      totalElement:
+        type: integer
+      pageSize:
+        type: integer
+      pageNumber:
+        type: integer
+      hasMoreElements:
+        type: boolean
+
+  Transaction:
+    type: object
+    required:
+      - id
+      - organization_id
+      - user_id
+      - transaction_type
+      - amount
+      - currency
+      - transaction_date
+      - description
+      - created_at
+    properties:
+      id:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      transaction_type:
+        type: string
+        enum: [income, expense, transfer]
+        example: "expense"
+      amount:
+        type: number
+        format: float
+        example: 50.00
+      currency:
+        type: string
+        minLength: 3
+        maxLength: 3
+        example: "USD"
+      transaction_date:
+        type: string
+        format: date-time
+        example: "2026-07-11T19:30:00Z"
+      description:
+        type: string
+        example: "Cena en restaurante italiano"
+      notes:
+        type: string
+        example: "Cena de negocios con cliente"
+      category_id:
+        type: string
+        format: uuid
+      category_name:
+        type: string
+        example: "Restaurantes"
+      category_icon:
+        type: string
+        example: "🍽️"
+      account_id:
+        type: string
+        format: uuid
+      account_name:
+        type: string
+        example: "Tarjeta de Crédito"
+      to_account_id:
+        type: string
+        format: uuid
+        description: "Solo para transfers"
+      to_account_name:
+        type: string
+        description: "Solo para transfers"
+      tags:
+        type: array
+        items:
+          $ref: '#/definitions/Tag'
+      attachments:
+        type: array
+        items:
+          $ref: '#/definitions/Attachment'
+      is_recurring:
+        type: boolean
+        example: false
+      recurring_pattern:
+        type: string
+        enum: [daily, weekly, monthly, yearly]
+      voice_input_id:
+        type: string
+        format: uuid
+        description: "ID si fue creada por voz"
+      location:
+        type: object
+        properties:
+          latitude:
+            type: number
+            format: float
+          longitude:
+            type: number
+            format: float
+          address:
+            type: string
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  TransactionCreateRequest:
+    type: object
+    required:
+      - transaction_type
+      - amount
+      - currency
+      - transaction_date
+      - description
+      - account_id
+    properties:
+      transaction_type:
+        type: string
+        enum: [income, expense, transfer]
+      amount:
+        type: number
+        format: float
+        minimum: 0.01
+      currency:
+        type: string
+        minLength: 3
+        maxLength: 3
+        example: "USD"
+      transaction_date:
+        type: string
+        format: date-time
+      description:
+        type: string
+        minLength: 1
+        maxLength: 255
+      notes:
+        type: string
+        maxLength: 2000
+      category_id:
+        type: string
+        format: uuid
+      account_id:
+        type: string
+        format: uuid
+      to_account_id:
+        type: string
+        format: uuid
+        description: "Requerido si type=transfer"
+      tag_ids:
+        type: array
+        items:
+          type: string
+          format: uuid
+      is_recurring:
+        type: boolean
+        default: false
+      recurring_pattern:
+        type: string
+        enum: [daily, weekly, monthly, yearly]
+
+  TransactionUpdateRequest:
+    type: object
+    required:
+      - transaction_type
+      - amount
+      - currency
+      - transaction_date
+      - description
+      - account_id
+    properties:
+      transaction_type:
+        type: string
+        enum: [income, expense, transfer]
+      amount:
+        type: number
+        format: float
+        minimum: 0.01
+      currency:
+        type: string
+        minLength: 3
+        maxLength: 3
+      transaction_date:
+        type: string
+        format: date-time
+      description:
+        type: string
+        minLength: 1
+        maxLength: 255
+      notes:
+        type: string
+        maxLength: 2000
+      category_id:
+        type: string
+        format: uuid
+      account_id:
+        type: string
+        format: uuid
+      to_account_id:
+        type: string
+        format: uuid
+      tag_ids:
+        type: array
+        items:
+          type: string
+          format: uuid
+      is_recurring:
+        type: boolean
+      recurring_pattern:
+        type: string
+        enum: [daily, weekly, monthly, yearly]
+
+  TransactionPatchRequest:
+    type: object
+    description: "Todos los campos opcionales"
+    properties:
+      transaction_type:
+        type: string
+        enum: [income, expense, transfer]
+      amount:
+        type: number
+        format: float
+        minimum: 0.01
+      currency:
+        type: string
+        minLength: 3
+        maxLength: 3
+      transaction_date:
+        type: string
+        format: date-time
+      description:
+        type: string
+        minLength: 1
+        maxLength: 255
+      notes:
+        type: string
+        maxLength: 2000
+      category_id:
+        type: string
+        format: uuid
+      account_id:
+        type: string
+        format: uuid
+      tag_ids:
+        type: array
+        items:
+          type: string
+          format: uuid
+
+  Dashboard:
+    type: object
+    properties:
+      period:
+        type: string
+        example: "month"
+      total_balance:
+        type: number
+        format: float
+        example: 5800.00
+      total_income:
+        type: number
+        format: float
+        example: 8000.00
+      total_expense:
+        type: number
+        format: float
+        example: 3200.00
+      net_change:
+        type: number
+        format: float
+        example: 4800.00
+      accounts_summary:
+        type: array
+        items:
+          type: object
+          properties:
+            account_id:
+              type: string
+              format: uuid
+            account_name:
+              type: string
+            balance:
+              type: number
+      top_expense_categories:
+        type: array
+        items:
+          $ref: '#/definitions/CategorySummary'
+      recent_transactions:
+        type: array
+        items:
+          $ref: '#/definitions/Transaction'
+      budget_alerts:
+        type: array
+        items:
+          type: object
+          properties:
+            budget_name:
+              type: string
+            percentage_used:
+              type: number
+            alert_level:
+              type: string
+              enum: [warning, danger]
+
+  TransactionSummary:
+    type: object
+    properties:
+      date_from:
+        type: string
+        format: date
+      date_to:
+        type: string
+        format: date
+      total_income:
+        type: number
+        format: float
+      total_expense:
+        type: number
+        format: float
+      net_balance:
+        type: number
+        format: float
+      avg_daily_expense:
+        type: number
+        format: float
+      transaction_count:
+        type: integer
+      by_period:
+        type: array
+        items:
+          type: object
+          properties:
+            period:
+              type: string
+              example: "2026-07"
+            income:
+              type: number
+            expense:
+              type: number
+            net:
+              type: number
+
+  CategorySummary:
+    type: object
+    properties:
+      category_id:
+        type: string
+        format: uuid
+      category_name:
+        type: string
+        example: "Restaurantes"
+      category_icon:
+        type: string
+        example: "🍽️"
+      total_amount:
+        type: number
+        format: float
+        example: 450.00
+      transaction_count:
+        type: integer
+        example: 15
+      percentage:
+        type: number
+        format: float
+        example: 14.06
+        description: "Porcentaje del total"
+
+  Tag:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      name:
+        type: string
+      color:
+        type: string
+
+  Attachment:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      file_name:
+        type: string
+        example: "recibo.pdf"
+      file_type:
+        type: string
+        example: "application/pdf"
+      file_url:
+        type: string
+        format: uri
+        description: "URL pre-signed de S3"
+      file_size:
+        type: integer
+        example: 204800
+
+  ErrorResponse:
+    type: object
+    required:
+      - headers
+      - messageResponse
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

@@ -1,0 +1,347 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Webhooks
+  description: |
+    API para recibir webhooks externos, principalmente de Wompi.
+
+    **Wompi Webhook Events:**
+    - transaction.updated: Estado de transacción actualizado
+    - payment_source.created: Método de pago creado
+    - payment_source.deleted: Método de pago eliminado
+
+    **Seguridad:**
+    - Verificación de firma HMAC SHA-256
+    - Wompi-Signature header validation
+    - IP whitelist de Wompi
+
+    **Importante:**
+    - Este endpoint NO requiere autenticación JWT
+    - La autenticación se hace mediante firma de Wompi
+    - Respuestas deben ser rápidas (<5 segundos)
+    - Procesamiento asíncrono recomendado
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+tags:
+  - name: Wompi
+    description: Webhooks de Wompi payment gateway
+
+paths:
+  /webhooks/wompi:
+    post:
+      tags:
+        - Wompi
+      summary: Recibir notificación de Wompi
+      description: |
+        Endpoint para recibir notificaciones de eventos de Wompi.
+
+        **CRÍTICO - Validación de Seguridad HMAC SHA-256:**
+
+        Wompi firma cada webhook con HMAC-SHA256 usando un secret compartido.
+        Es OBLIGATORIO validar la firma antes de procesar cualquier evento.
+
+        **Proceso de validación (código Node.js):**
+
+        ```javascript
+        const crypto = require('crypto');
+
+        async function validateWompiWebhook(req) {
+          // 1. Obtener signature del header
+          const receivedSignature = req.headers['wompi-signature'];
+
+          if (!receivedSignature) {
+            console.error('Missing Wompi-Signature header');
+            return false;
+          }
+
+          // 2. Obtener secret desde AWS Secrets Manager
+          const secretsManager = new AWS.SecretsManager();
+          const secretData = await secretsManager.getSecretValue({
+            SecretId: 'wompi-events-secret'
+          }).promise();
+
+          const secret = JSON.parse(secretData.SecretString).WOMPI_EVENTS_SECRET;
+
+          // 3. Serializar payload (IMPORTANTE: usar mismo formato que Wompi)
+          // Wompi serializa sin espacios ni saltos de línea
+          const payload = JSON.stringify(req.body);
+
+          // 4. Calcular HMAC SHA-256 esperado
+          const expectedSignature = crypto
+            .createHmac('sha256', secret)
+            .update(payload)
+            .digest('hex');
+
+          // 5. Comparación timing-safe para prevenir timing attacks
+          try {
+            const isValid = crypto.timingSafeEqual(
+              Buffer.from(receivedSignature, 'hex'),
+              Buffer.from(expectedSignature, 'hex')
+            );
+
+            if (!isValid) {
+              console.error('Invalid HMAC signature', {
+                received: receivedSignature,
+                expected: expectedSignature
+              });
+              return false;
+            }
+
+            console.log('Webhook signature validated successfully');
+            return true;
+
+          } catch (error) {
+            console.error('Error comparing signatures:', error);
+            return false;
+          }
+        }
+
+        // Uso en Lambda handler
+        exports.handler = async (event) => {
+          const isValid = await validateWompiWebhook(event);
+
+          if (!isValid) {
+            return {
+              statusCode: 401,
+              body: JSON.stringify({
+                status: 'error',
+                message: 'Invalid signature'
+              })
+            };
+          }
+
+          // Procesar evento solo si firma es válida...
+        };
+        ```
+
+        **Idempotencia (prevenir procesamiento duplicado):**
+
+        Wompi puede enviar el mismo evento múltiples veces (reintentos).
+        Usar el campo `event.data.transaction.id` o `sent_at` como clave de idempotencia.
+
+        ```sql
+        -- Tabla para tracking de eventos procesados
+        CREATE TABLE webhook_events (
+          event_id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL,
+          processed_at TIMESTAMP DEFAULT NOW(),
+          payload JSONB NOT NULL
+        );
+
+        -- Antes de procesar, verificar si ya fue procesado
+        SELECT 1 FROM webhook_events
+        WHERE event_id = $1;
+
+        -- Si existe, retornar 200 OK sin procesar
+        -- Si no existe, INSERT y procesar
+        ```
+
+        **Headers requeridos:**
+        - Wompi-Signature: Firma HMAC SHA-256 del payload (hex string)
+
+        **Proceso de manejo:**
+        1. **Validar Wompi-Signature** (CRÍTICO - ver código arriba)
+        2. Verificar idempotencia (evitar procesamiento duplicado)
+        3. Validar estructura del evento
+        4. Procesar según tipo de evento (transaction.updated, etc.)
+        5. Responder 200 OK en < 5 segundos (Wompi tiene timeout)
+        6. Procesamiento asíncrono si tarda más de 5s (usar SQS)
+
+        **Eventos soportados:**
+        - `transaction.updated`: Estado de transacción cambió (APPROVED, DECLINED, VOIDED, ERROR)
+        - `payment_source.created`: Método de pago guardado exitosamente
+        - `payment_source.deleted`: Método de pago eliminado por usuario
+
+        **Reintentos de Wompi:**
+        - Si no responde 200 OK, Wompi reintenta hasta 10 veces
+        - Backoff exponencial: 1min, 5min, 15min, 30min, 1h, 2h, 4h, 8h, 16h, 24h
+        - Implementar idempotencia para manejar reintentos
+      operationId: wompiWebhook
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: Wompi-Signature
+          in: header
+          required: true
+          type: string
+          description: "Firma HMAC SHA-256 del payload con secret de Wompi"
+
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/WompiWebhookPayload'
+
+      responses:
+        200:
+          description: Webhook procesado correctamente
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "received"
+              message:
+                type: string
+                example: "Webhook processed successfully"
+
+        400:
+          description: Payload inválido
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Invalid payload"
+
+        401:
+          description: Firma inválida
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Invalid signature"
+
+        500:
+          description: Error interno al procesar webhook
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "error"
+              message:
+                type: string
+                example: "Internal error"
+
+definitions:
+  WompiWebhookPayload:
+    type: object
+    required:
+      - event
+      - data
+      - sent_at
+    properties:
+      event:
+        type: string
+        enum:
+          - transaction.updated
+          - payment_source.created
+          - payment_source.deleted
+        example: "transaction.updated"
+      data:
+        type: object
+        description: "Datos del evento (varía según tipo)"
+        properties:
+          transaction:
+            $ref: '#/definitions/WompiTransaction'
+      sent_at:
+        type: integer
+        format: int64
+        example: 1657650000000
+        description: "Unix timestamp en milisegundos"
+      environment:
+        type: string
+        enum: [production, test]
+        example: "production"
+
+  WompiTransaction:
+    type: object
+    properties:
+      id:
+        type: string
+        example: "123456-1234567890-12345"
+      amount_in_cents:
+        type: integer
+        example: 5831000
+        description: "Monto en centavos (58310.00 COP)"
+      currency:
+        type: string
+        example: "COP"
+      status:
+        type: string
+        enum: [PENDING, APPROVED, DECLINED, VOIDED, ERROR]
+        example: "APPROVED"
+      reference:
+        type: string
+        example: "TEMIS-20260712-1234567890"
+        description: "Referencia única que enviamos a Wompi"
+      customer_email:
+        type: string
+        format: email
+        example: "juan.perez@example.com"
+      payment_method_type:
+        type: string
+        enum: [CARD, NEQUI, PSE, BANCOLOMBIA_TRANSFER]
+        example: "CARD"
+      payment_method:
+        type: object
+        properties:
+          type:
+            type: string
+            example: "CARD"
+          extra:
+            type: object
+            properties:
+              name:
+                type: string
+                example: "VISA-4242"
+              last_four:
+                type: string
+                example: "4242"
+              brand:
+                type: string
+                example: "VISA"
+      created_at:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:30:00Z"
+      finalized_at:
+        type: string
+        format: date-time
+        example: "2026-07-12T10:30:15Z"
+      payment_source_id:
+        type: string
+        example: "src_prod_card_1234567890"
+        description: "Token de pago si se guardó"
+      shipping_address:
+        type: object
+      redirect_url:
+        type: string
+      payment_link_id:
+        type: string
+
+  WompiPaymentSource:
+    type: object
+    properties:
+      id:
+        type: string
+        example: "src_prod_card_1234567890"
+      type:
+        type: string
+        example: "CARD"
+      status:
+        type: string
+        enum: [AVAILABLE, DELETED]
+        example: "AVAILABLE"
+      created_at:
+        type: string
+        format: date-time
+      acceptance_token:
+        type: string
+      customer_email:
+        type: string
+        format: email

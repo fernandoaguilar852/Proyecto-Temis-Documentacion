@@ -1,0 +1,589 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Presupuestos
+  description: |
+    API REST para gestión de presupuestos financieros en TEMIS.
+
+    **Funcionalidades:**
+    - Crear presupuestos por categoría y período
+    - Seguimiento de gastos vs presupuesto
+    - Alertas cuando se excede límite
+    - Presupuestos recurrentes (mensual, anual)
+    - Reportes y estadísticas
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Budgets
+    description: Operaciones CRUD sobre presupuestos
+
+paths:
+  /budgets:
+    get:
+      tags:
+        - Budgets
+      summary: Listar presupuestos
+      operationId: listBudgets
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: period
+          in: query
+          required: false
+          type: string
+          enum: [current, past, future, all]
+          default: current
+        - name: status
+          in: query
+          required: false
+          type: string
+          enum: [active, exceeded, inactive]
+      responses:
+        200:
+          description: Lista de presupuestos
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  budgets:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Budget'
+
+    post:
+      tags:
+        - Budgets
+      summary: Crear presupuesto
+      operationId: createBudget
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/BudgetCreateRequest'
+      responses:
+        201:
+          description: Presupuesto creado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  budget:
+                    $ref: '#/definitions/Budget'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /budgets/{budgetId}:
+    get:
+      tags:
+        - Budgets
+      summary: Obtener presupuesto por ID
+      operationId: getBudgetById
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: budgetId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Presupuesto obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  budget:
+                    $ref: '#/definitions/Budget'
+        404:
+          description: Presupuesto no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Budgets
+      summary: Actualizar presupuesto
+      operationId: updateBudget
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: budgetId
+          in: path
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/BudgetUpdateRequest'
+      responses:
+        200:
+          description: Presupuesto actualizado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  budget:
+                    $ref: '#/definitions/Budget'
+
+    delete:
+      tags:
+        - Budgets
+      summary: Eliminar presupuesto
+      operationId: deleteBudget
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: budgetId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Presupuesto eliminado
+        404:
+          description: Presupuesto no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /budgets/{budgetId}/projection:
+    get:
+      tags:
+        - Presupuestos
+      summary: Obtener proyección de gasto para un presupuesto
+      description: |
+        Calcula y retorna la proyección de gasto basada en el consumo actual.
+
+        **Cálculo de proyección:**
+        1. Obtener gasto actual del mes en curso para la categoría
+        2. Calcular días transcurridos del mes
+        3. Calcular gasto promedio diario = gasto_actual / días_transcurridos
+        4. Proyectar fin de mes = gasto_promedio_diario * total_días_mes
+        5. Comparar con límite del presupuesto
+
+        **Métricas incluidas:**
+        - Gasto actual
+        - Gasto promedio diario
+        - Proyección fin de mes
+        - Porcentaje proyectado vs límite
+        - Días restantes del mes
+        - Si se proyecta exceder el presupuesto
+
+        **Casos de uso:**
+        - Mostrar advertencia temprana si va a exceder
+        - Ajustar gastos antes de fin de mes
+        - Dashboard de presupuestos con proyecciones
+      operationId: getBudgetProjection
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: budgetId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Proyección calculada exitosamente
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  budget:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      name:
+                        type: string
+                        example: "Alimentos"
+                      limit_amount:
+                        type: number
+                        format: float
+                        example: 500000.00
+                      period:
+                        type: string
+                        enum: [monthly, weekly, yearly]
+                        example: "monthly"
+                  current:
+                    type: object
+                    description: Gasto actual del período
+                    properties:
+                      spent:
+                        type: number
+                        format: float
+                        example: 320000.00
+                      percentage:
+                        type: number
+                        format: float
+                        example: 64.0
+                        description: Porcentaje del límite gastado
+                      days_elapsed:
+                        type: integer
+                        example: 15
+                        description: Días transcurridos del mes
+                  projection:
+                    type: object
+                    description: Proyección fin de mes
+                    properties:
+                      daily_average:
+                        type: number
+                        format: float
+                        example: 21333.33
+                        description: Gasto promedio diario
+                      projected_total:
+                        type: number
+                        format: float
+                        example: 640000.00
+                        description: Proyección de gasto total fin de mes
+                      projected_percentage:
+                        type: number
+                        format: float
+                        example: 128.0
+                        description: Porcentaje proyectado vs límite
+                      will_exceed:
+                        type: boolean
+                        example: true
+                        description: true si se proyecta exceder el límite
+                      excess_amount:
+                        type: number
+                        format: float
+                        example: 140000.00
+                        description: Monto que excedería (si will_exceed=true)
+                      days_remaining:
+                        type: integer
+                        example: 15
+                        description: Días restantes del mes
+                      recommended_daily_limit:
+                        type: number
+                        format: float
+                        example: 12000.00
+                        description: Gasto diario recomendado para no exceder
+        404:
+          description: Presupuesto no encontrado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        500:
+          description: Error al calcular proyección
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  Budget:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+      user_id:
+        type: string
+        format: uuid
+      name:
+        type: string
+        example: "Presupuesto Restaurantes Mayo"
+      amount:
+        type: number
+        format: float
+        example: 500000.00
+      currency:
+        type: string
+        example: "COP"
+      period_type:
+        type: string
+        enum: [monthly, quarterly, annual, custom]
+        example: "monthly"
+      start_date:
+        type: string
+        format: date
+        example: "2026-05-01"
+      end_date:
+        type: string
+        format: date
+        example: "2026-05-31"
+      category_id:
+        type: string
+        format: uuid
+      category_name:
+        type: string
+        example: "Restaurantes"
+      spent:
+        type: number
+        format: float
+        example: 450000.00
+        description: "Monto gastado en el período"
+      remaining:
+        type: number
+        format: float
+        example: 50000.00
+      percentage_used:
+        type: number
+        format: float
+        example: 90.0
+      is_exceeded:
+        type: boolean
+        example: false
+      alert_threshold:
+        type: integer
+        example: 80
+        description: "Porcentaje para alertar (50, 80, 90, 100)"
+      is_recurring:
+        type: boolean
+        example: true
+      status:
+        type: string
+        enum: [active, exceeded, inactive]
+        example: "active"
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  BudgetCreateRequest:
+    type: object
+    required:
+      - name
+      - amount
+      - currency
+      - start_date
+      - end_date
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 255
+      amount:
+        type: number
+        format: float
+        minimum: 0.01
+      currency:
+        type: string
+        minLength: 3
+        maxLength: 3
+      period_type:
+        type: string
+        enum: [monthly, quarterly, annual, custom]
+        default: monthly
+      start_date:
+        type: string
+        format: date
+      end_date:
+        type: string
+        format: date
+      category_id:
+        type: string
+        format: uuid
+      alert_threshold:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 80
+      is_recurring:
+        type: boolean
+        default: false
+
+  BudgetUpdateRequest:
+    type: object
+    required:
+      - name
+      - amount
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 255
+      amount:
+        type: number
+        format: float
+        minimum: 0.01
+      start_date:
+        type: string
+        format: date
+      end_date:
+        type: string
+        format: date
+      category_id:
+        type: string
+        format: uuid
+      alert_threshold:
+        type: integer
+        minimum: 1
+        maximum: 100
+      is_recurring:
+        type: boolean
+      status:
+        type: string
+        enum: [active, inactive]
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string

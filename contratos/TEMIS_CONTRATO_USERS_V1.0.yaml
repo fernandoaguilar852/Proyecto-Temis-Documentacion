@@ -1,0 +1,641 @@
+swagger: '2.0'
+info:
+  title: TEMIS - API de Usuarios
+  description: |
+    API REST para gestión de perfiles de usuario en TEMIS.
+
+    **Funcionalidades:**
+    - Consulta y actualización de perfil
+    - Gestión de avatar
+    - Preferencias y configuraciones
+    - Cambio de contraseña
+    - Configuración de notificaciones
+    - Gestión de sesiones activas
+  version: 1.0.0
+
+host: api.temis.app
+basePath: /v1
+schemes:
+  - https
+
+securityDefinitions:
+  Bearer:
+    type: apiKey
+    name: Authorization
+    in: header
+
+security:
+  - Bearer: []
+
+tags:
+  - name: Profile
+    description: Gestión de perfil de usuario
+  - name: Settings
+    description: Configuraciones y preferencias
+  - name: Security
+    description: Seguridad y sesiones
+
+paths:
+  /users/me:
+    get:
+      tags:
+        - Profile
+      summary: Obtener perfil del usuario autenticado
+      operationId: getMyProfile
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Perfil obtenido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/definitions/User'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    put:
+      tags:
+        - Profile
+      summary: Actualizar perfil
+      operationId: updateMyProfile
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/UserUpdateRequest'
+      responses:
+        200:
+          description: Perfil actualizado
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/definitions/User'
+        400:
+          description: Datos inválidos
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /users/me/avatar:
+    post:
+      tags:
+        - Profile
+      summary: Subir avatar
+      description: |
+        Sube una imagen de avatar. La imagen se procesa y almacena en S3.
+        - Formatos: JPEG, PNG, GIF
+        - Tamaño máximo: 5 MB
+        - Se genera thumbnail automáticamente
+      operationId: uploadAvatar
+      consumes:
+        - multipart/form-data
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: avatar
+          in: formData
+          required: true
+          type: file
+          description: Archivo de imagen
+      responses:
+        200:
+          description: Avatar subido
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  avatar_url:
+                    type: string
+                    format: uri
+        400:
+          description: Archivo inválido
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+    delete:
+      tags:
+        - Profile
+      summary: Eliminar avatar
+      operationId: deleteAvatar
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Avatar eliminado
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /users/me/password:
+    put:
+      tags:
+        - Security
+      summary: Cambiar contraseña
+      description: Permite al usuario cambiar su contraseña
+      operationId: changePassword
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            required:
+              - current_password
+              - new_password
+            properties:
+              current_password:
+                type: string
+                minLength: 8
+              new_password:
+                type: string
+                minLength: 8
+                description: Debe cumplir políticas de seguridad
+      responses:
+        200:
+          description: Contraseña cambiada
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+        400:
+          description: Contraseña actual incorrecta o nueva contraseña débil
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        401:
+          description: No autenticado
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /users/me/preferences:
+    get:
+      tags:
+        - Settings
+      summary: Obtener preferencias
+      operationId: getPreferences
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Preferencias obtenidas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  preferences:
+                    $ref: '#/definitions/UserPreferences'
+
+    put:
+      tags:
+        - Settings
+      summary: Actualizar preferencias
+      operationId: updatePreferences
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: body
+          in: body
+          required: true
+          schema:
+            $ref: '#/definitions/UserPreferences'
+      responses:
+        200:
+          description: Preferencias actualizadas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  preferences:
+                    $ref: '#/definitions/UserPreferences'
+
+  /users/me/sessions:
+    get:
+      tags:
+        - Security
+      summary: Listar sesiones activas
+      description: Muestra todas las sesiones activas del usuario
+      operationId: listSessions
+      produces:
+        - application/json
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Lista de sesiones
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: '#/definitions/Session'
+
+  /users/me/sessions/{sessionId}:
+    delete:
+      tags:
+        - Security
+      summary: Cerrar sesión específica
+      description: Revoca un refresh token específico
+      operationId: revokeSession
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: sessionId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        204:
+          description: Sesión cerrada
+        404:
+          description: Sesión no encontrada
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+
+  /users/me/sessions/revoke-all:
+    post:
+      tags:
+        - Security
+      summary: Cerrar todas las sesiones
+      description: Revoca todos los refresh tokens excepto el actual
+      operationId: revokeAllSessions
+      parameters:
+        - name: message-uuid
+          in: header
+          required: true
+          type: string
+          format: uuid
+        - name: request-app-id
+          in: header
+          required: true
+          type: string
+          format: uuid
+      responses:
+        200:
+          description: Todas las sesiones cerradas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                $ref: '#/definitions/MessageResponse'
+              data:
+                type: object
+                properties:
+                  revoked_count:
+                    type: integer
+                    example: 3
+
+definitions:
+  ResponseHeaders:
+    type: object
+    properties:
+      httpStatusCode:
+        type: integer
+      httpStatusDesc:
+        type: string
+      messageUuid:
+        type: string
+        format: uuid
+      requestDatetime:
+        type: string
+        format: date-time
+      requestAppId:
+        type: string
+        format: uuid
+
+  MessageResponse:
+    type: object
+    properties:
+      responseCode:
+        type: string
+      responseMessage:
+        type: string
+      responseDetail:
+        type: string
+
+  User:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      organization_id:
+        type: string
+        format: uuid
+      email:
+        type: string
+        format: email
+        example: "juan.perez@example.com"
+      first_name:
+        type: string
+        example: "Juan"
+      last_name:
+        type: string
+        example: "Pérez"
+      full_name:
+        type: string
+        example: "Juan Pérez"
+      avatar_url:
+        type: string
+        format: uri
+      phone:
+        type: string
+        example: "+573001234567"
+      country_code:
+        type: string
+        example: "CO"
+      language:
+        type: string
+        example: "es"
+      timezone:
+        type: string
+        example: "America/Bogota"
+      is_email_verified:
+        type: boolean
+        example: true
+      is_active:
+        type: boolean
+        example: true
+      last_login_at:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+      updated_at:
+        type: string
+        format: date-time
+
+  UserUpdateRequest:
+    type: object
+    properties:
+      first_name:
+        type: string
+        minLength: 1
+        maxLength: 100
+      last_name:
+        type: string
+        minLength: 1
+        maxLength: 100
+      phone:
+        type: string
+        maxLength: 20
+      country_code:
+        type: string
+        minLength: 2
+        maxLength: 2
+      language:
+        type: string
+        enum: [es, en]
+      timezone:
+        type: string
+
+  UserPreferences:
+    type: object
+    properties:
+      theme:
+        type: string
+        enum: [light, dark, auto]
+        default: auto
+      currency:
+        type: string
+        example: "COP"
+      date_format:
+        type: string
+        enum: [DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD]
+        default: "DD/MM/YYYY"
+      notifications:
+        type: object
+        properties:
+          email_enabled:
+            type: boolean
+            default: true
+          push_enabled:
+            type: boolean
+            default: true
+          task_reminders:
+            type: boolean
+            default: true
+          subscription_alerts:
+            type: boolean
+            default: true
+          budget_alerts:
+            type: boolean
+            default: true
+          marketing_emails:
+            type: boolean
+            default: false
+
+  Session:
+    type: object
+    properties:
+      id:
+        type: string
+        format: uuid
+      device_name:
+        type: string
+        example: "iPhone 13"
+      device_type:
+        type: string
+        example: "mobile"
+      os:
+        type: string
+        example: "iOS 15.0"
+      browser:
+        type: string
+        example: "Safari"
+      ip_address:
+        type: string
+        example: "186.84.123.45"
+      location:
+        type: string
+        example: "Bogotá, Colombia"
+      is_current:
+        type: boolean
+        example: true
+      last_activity:
+        type: string
+        format: date-time
+      created_at:
+        type: string
+        format: date-time
+
+  ErrorResponse:
+    type: object
+    properties:
+      headers:
+        $ref: '#/definitions/ResponseHeaders'
+      messageResponse:
+        type: object
+        properties:
+          responseCode:
+            type: string
+          responseMessage:
+            type: string
+          responseDetail:
+            type: string
+      errors:
+        type: array
+        items:
+          type: object
+          properties:
+            errorCode:
+              type: string
+            errorDetail:
+              type: string
