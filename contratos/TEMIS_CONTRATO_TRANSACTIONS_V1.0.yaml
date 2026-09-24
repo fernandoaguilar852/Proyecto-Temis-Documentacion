@@ -4,6 +4,19 @@ info:
   description: |
     API REST para gestión de transacciones financieras en la plataforma TEMIS.
 
+    **⚠️ ACCESO RESTRINGIDO - MÓDULO DE FINANZAS REQUERIDO**
+    Este módulo requiere que el usuario tenga activo el **Módulo de Finanzas** en su plan.
+
+    **Planes con acceso:**
+    - ✅ Basic: 1000 transacciones/mes, 5 presupuestos, 3 cuentas
+    - ✅ Pro: Ilimitado
+    - ✅ Premium: Ilimitado
+
+    **Planes sin acceso:**
+    - ❌ Free: Sin acceso al módulo de Finanzas
+
+    Si el usuario no tiene el módulo activo, todos los endpoints retornarán **403 Forbidden**.
+
     **Funcionalidades principales:**
     - Registro de ingresos y gastos
     - Transferencias entre cuentas
@@ -232,6 +245,40 @@ paths:
           description: No autenticado
           schema:
             $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin acceso al módulo de Finanzas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                type: object
+                properties:
+                  responseCode:
+                    type: string
+                    example: "FINANCE_MODULE_NOT_ACTIVE"
+                  responseMessage:
+                    type: string
+                    example: "Módulo de Finanzas no activo"
+                  responseDetail:
+                    type: string
+                    example: "Tu plan actual no incluye el módulo de Finanzas. Actualiza a Basic, Pro o Premium para acceder."
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    errorCode:
+                      type: string
+                      example: "MODULE_REQUIRED"
+                    errorDetail:
+                      type: string
+                      example: "finance"
+                    upgradeUrl:
+                      type: string
+                      example: "/subscriptions/plans"
 
         500:
           description: Error interno
@@ -707,6 +754,40 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
 
+        403:
+          description: Sin acceso al módulo de Finanzas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                type: object
+                properties:
+                  responseCode:
+                    type: string
+                    example: "FINANCE_MODULE_NOT_ACTIVE"
+                  responseMessage:
+                    type: string
+                    example: "Módulo de Finanzas no activo"
+                  responseDetail:
+                    type: string
+                    example: "Tu plan actual no incluye el módulo de Finanzas. Actualiza a Basic, Pro o Premium para acceder."
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    errorCode:
+                      type: string
+                      example: "MODULE_REQUIRED"
+                    errorDetail:
+                      type: string
+                      example: "finance"
+                    upgradeUrl:
+                      type: string
+                      example: "/subscriptions/plans"
+
         500:
           description: Error interno
           schema:
@@ -794,6 +875,40 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
 
+        403:
+          description: Sin acceso al módulo de Finanzas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                type: object
+                properties:
+                  responseCode:
+                    type: string
+                    example: "FINANCE_MODULE_NOT_ACTIVE"
+                  responseMessage:
+                    type: string
+                    example: "Módulo de Finanzas no activo"
+                  responseDetail:
+                    type: string
+                    example: "Tu plan actual no incluye el módulo de Finanzas. Actualiza a Basic, Pro o Premium para acceder."
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    errorCode:
+                      type: string
+                      example: "MODULE_REQUIRED"
+                    errorDetail:
+                      type: string
+                      example: "finance"
+                    upgradeUrl:
+                      type: string
+                      example: "/subscriptions/plans"
+
         500:
           description: Error interno
           schema:
@@ -877,6 +992,40 @@ paths:
           description: No autenticado
           schema:
             $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin acceso al módulo de Finanzas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                type: object
+                properties:
+                  responseCode:
+                    type: string
+                    example: "FINANCE_MODULE_NOT_ACTIVE"
+                  responseMessage:
+                    type: string
+                    example: "Módulo de Finanzas no activo"
+                  responseDetail:
+                    type: string
+                    example: "Tu plan actual no incluye el módulo de Finanzas. Actualiza a Basic, Pro o Premium para acceder."
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    errorCode:
+                      type: string
+                      example: "MODULE_REQUIRED"
+                    errorDetail:
+                      type: string
+                      example: "finance"
+                    upgradeUrl:
+                      type: string
+                      example: "/subscriptions/plans"
 
         500:
           description: Error interno
@@ -1150,6 +1299,40 @@ paths:
           description: No autenticado
           schema:
             $ref: '#/definitions/ErrorResponse'
+
+        403:
+          description: Sin acceso al módulo de Finanzas
+          schema:
+            type: object
+            properties:
+              headers:
+                $ref: '#/definitions/ResponseHeaders'
+              messageResponse:
+                type: object
+                properties:
+                  responseCode:
+                    type: string
+                    example: "FINANCE_MODULE_NOT_ACTIVE"
+                  responseMessage:
+                    type: string
+                    example: "Módulo de Finanzas no activo"
+                  responseDetail:
+                    type: string
+                    example: "Tu plan actual no incluye el módulo de Finanzas. Actualiza a Basic, Pro o Premium para acceder."
+              errors:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    errorCode:
+                      type: string
+                      example: "MODULE_REQUIRED"
+                    errorDetail:
+                      type: string
+                      example: "finance"
+                    upgradeUrl:
+                      type: string
+                      example: "/subscriptions/plans"
 
         500:
           description: Error en procesamiento

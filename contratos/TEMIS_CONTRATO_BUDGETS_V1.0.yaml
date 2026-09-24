@@ -4,6 +4,19 @@ info:
   description: |
     API REST para gestión de presupuestos financieros en TEMIS.
 
+    **⚠️ ACCESO RESTRINGIDO - MÓDULO DE FINANZAS REQUERIDO**
+    Este módulo requiere que el usuario tenga activo el **Módulo de Finanzas** en su plan.
+
+    **Planes con acceso:**
+    - ✅ Basic: 5 presupuestos máximo
+    - ✅ Pro: Ilimitado
+    - ✅ Premium: Ilimitado
+
+    **Planes sin acceso:**
+    - ❌ Free: Sin acceso al módulo de Finanzas
+
+    Si el usuario no tiene el módulo activo, todos los endpoints retornarán **403 Forbidden**.
+
     **Funcionalidades:**
     - Crear presupuestos por categoría y período
     - Seguimiento de gastos vs presupuesto

@@ -4,6 +4,19 @@ info:
   description: |
     API REST para el módulo AI Memory ("Tu Segunda Memoria Digital") en la plataforma TEMIS.
 
+    **⚠️ ACCESO RESTRINGIDO - MÓDULO DE AI MEMORY REQUERIDO**
+    Este módulo requiere que el usuario tenga activo el **Módulo de AI Memory** en su plan.
+
+    **Planes con acceso:**
+    - ✅ Pro: 20GB almacenamiento, 100 búsquedas IA/mes
+    - ✅ Premium: 100GB almacenamiento, 500 búsquedas IA/mes
+
+    **Planes sin acceso:**
+    - ❌ Free: Sin acceso al módulo de AI Memory
+    - ❌ Basic: Sin acceso al módulo de AI Memory
+
+    Si el usuario no tiene el módulo activo, todos los endpoints retornarán **403 Forbidden**.
+
     **Funcionalidades principales:**
     - Grabar y almacenar conversaciones con transcripción automática
     - Capturar fotos con procesamiento OCR inteligente
@@ -26,12 +39,10 @@ info:
 
     **Cuotas por plan:**
 
-    | Plan | Storage | Conversaciones/mes | Fotos OCR/mes | Documentos/mes | Emails/mes | Notas voz/mes | Búsquedas IA/mes |
-    |------|---------|-------------------|---------------|----------------|------------|---------------|------------------|
-    | Free | 2 GB | 5 | 10 | 0 | 0 | 10 | 10 |
-    | Basic | 5 GB | 20 | 50 | 20 | 20 | 50 | 50 |
-    | Pro | 20 GB | 100 | 200 | 100 | 100 | 200 | 200 |
-    | Premium | 100 GB | Ilimitado | Ilimitado | Ilimitado | Ilimitado | Ilimitado | Ilimitado |
+    | Plan | Storage | Memorias/mes | Búsquedas IA/mes | Adjuntos/memoria |
+    |------|---------|--------------|------------------|------------------|
+    | Pro | 20 GB | Ilimitado | 100 | 10 |
+    | Premium | 100 GB | Ilimitado | 500 | 50 |
 
     **Límites de tamaño de archivo:**
 

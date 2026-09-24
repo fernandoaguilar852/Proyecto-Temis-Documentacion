@@ -204,14 +204,91 @@ CREATE INDEX idx_plans_is_active ON plans(is_active);
 CREATE TRIGGER update_plans_updated_at BEFORE UPDATE ON plans
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-COMMENT ON TABLE plans IS 'Planes de suscripción - Tabla global (no multitenant)';
+COMMENT ON TABLE plans IS 'Planes de suscripción - Acceso progresivo a módulos según plan';
+COMMENT ON COLUMN plans.features IS 'JSONB con límites por módulo: tasks, passwords, transactions (finanzas), budgets, accounts, memories (ai_memory), storage_gb, ai_quota. -1 = ilimitado, 0 = sin acceso';
 
--- Insertar planes iniciales
-INSERT INTO plans (name, slug, price_monthly, price_yearly, features, sort_order) VALUES
-('Free', 'free', 0.00, 0.00, '{"tasks": 50, "transactions": 100, "passwords": 0, "ai_quota": 0, "storage_gb": 0}', 1),
-('Basic', 'basic', 4.99, 49.90, '{"tasks": 200, "transactions": 1000, "passwords": 100, "ai_quota": 20, "storage_gb": 5}', 2),
-('Pro', 'pro', 9.99, 99.90, '{"tasks": 1000, "transactions": 10000, "passwords": 1000, "ai_quota": 100, "storage_gb": 20}', 3),
-('Premium', 'premium', 19.99, 199.90, '{"tasks": -1, "transactions": -1, "passwords": -1, "ai_quota": 500, "storage_gb": 100}', 4);
+-- Insertar planes con acceso progresivo a módulos
+INSERT INTO plans (name, slug, price_monthly, price_yearly, features, sort_order, description) VALUES
+(
+    'Free',
+    'free',
+    0.00,
+    0.00,
+    '{
+        "tasks": 50,
+        "passwords": 10,
+        "transactions": 0,
+        "budgets": 0,
+        "accounts": 0,
+        "memories": 0,
+        "storage_gb": 0,
+        "ai_quota": 0,
+        "finance_module": false,
+        "ai_memory_module": false
+    }',
+    1,
+    'Plan gratuito - Solo tareas y contraseñas con límites'
+),
+(
+    'Basic',
+    'basic',
+    9.99,
+    99.90,
+    '{
+        "tasks": 200,
+        "passwords": 100,
+        "transactions": 1000,
+        "budgets": 5,
+        "accounts": 3,
+        "memories": 0,
+        "storage_gb": 0,
+        "ai_quota": 20,
+        "finance_module": true,
+        "ai_memory_module": false
+    }',
+    2,
+    'Plan básico - Tareas + Contraseñas + Módulo Finanzas con límites'
+),
+(
+    'Pro',
+    'pro',
+    14.99,
+    149.90,
+    '{
+        "tasks": -1,
+        "passwords": -1,
+        "transactions": -1,
+        "budgets": -1,
+        "accounts": -1,
+        "memories": -1,
+        "storage_gb": 20,
+        "ai_quota": 100,
+        "finance_module": true,
+        "ai_memory_module": true
+    }',
+    3,
+    'Plan profesional - Todo ilimitado + Módulo AI Memory (20GB)'
+),
+(
+    'Premium',
+    'premium',
+    19.99,
+    199.90,
+    '{
+        "tasks": -1,
+        "passwords": -1,
+        "transactions": -1,
+        "budgets": -1,
+        "accounts": -1,
+        "memories": -1,
+        "storage_gb": 100,
+        "ai_quota": 500,
+        "finance_module": true,
+        "ai_memory_module": true
+    }',
+    4,
+    'Plan premium - Todo ilimitado + Módulo AI Memory mejorado (100GB)'
+);
 
 -- ----------------------------------------------------------------------------
 -- Tabla: subscriptions
@@ -882,9 +959,9 @@ CREATE OR REPLACE FUNCTION check_plan_feature(
     p_feature VARCHAR(100)
 ) RETURNS BOOLEAN AS $$
 DECLARE
-    v_feature_value INTEGER;
+    v_feature_value TEXT;
 BEGIN
-    SELECT (pl.features->>p_feature)::INTEGER INTO v_feature_value
+    SELECT pl.features->>p_feature INTO v_feature_value
     FROM subscriptions s
     JOIN plans pl ON s.plan_id = pl.id
     WHERE s.organization_id = p_organization_id
@@ -893,22 +970,61 @@ BEGIN
     ORDER BY s.created_at DESC
     LIMIT 1;
 
-    -- Si no hay suscripción, asumir plan Free
+    -- Si no hay suscripción, asumir plan Free (sin acceso)
     IF v_feature_value IS NULL THEN
         RETURN false;
     END IF;
 
-    -- -1 significa ilimitado
-    IF v_feature_value = -1 THEN
-        RETURN true;
+    -- Si es booleano (finance_module, ai_memory_module)
+    IF v_feature_value IN ('true', 'false') THEN
+        RETURN v_feature_value::BOOLEAN;
     END IF;
 
-    -- 0 o NULL significa feature no disponible
-    RETURN v_feature_value > 0;
+    -- Si es numérico
+    DECLARE
+        v_numeric_value INTEGER;
+    BEGIN
+        v_numeric_value := v_feature_value::INTEGER;
+
+        -- -1 significa ilimitado
+        IF v_numeric_value = -1 THEN
+            RETURN true;
+        END IF;
+
+        -- 0 significa sin acceso
+        RETURN v_numeric_value > 0;
+    EXCEPTION
+        WHEN OTHERS THEN
+            RETURN false;
+    END;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION check_plan_feature IS 'Verifica si un feature está habilitado en el plan actual del usuario';
+
+-- Función: Verificar si usuario tiene acceso a módulo de Finanzas
+CREATE OR REPLACE FUNCTION has_finance_module(
+    p_organization_id INTEGER,
+    p_user_id INTEGER
+) RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN check_plan_feature(p_organization_id, p_user_id, 'finance_module');
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION has_finance_module IS 'Verifica si el usuario tiene acceso al módulo de Finanzas (planes Basic, Pro, Premium)';
+
+-- Función: Verificar si usuario tiene acceso a módulo de AI Memory
+CREATE OR REPLACE FUNCTION has_ai_memory_module(
+    p_organization_id INTEGER,
+    p_user_id INTEGER
+) RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN check_plan_feature(p_organization_id, p_user_id, 'ai_memory_module');
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION has_ai_memory_module IS 'Verifica si el usuario tiene acceso al módulo de AI Memory (planes Pro, Premium)';
 
 -- Función: Verificar cuota de IA disponible
 CREATE OR REPLACE FUNCTION check_ai_quota(
@@ -1380,7 +1496,7 @@ END $$;
 -- ============================================================================
 -- Tablas creadas: 25
 -- Extensiones: 3 (pgcrypto, pg_trgm, vector)
--- Funciones: 6
+-- Funciones: 8 (check_plan_feature, has_finance_module, has_ai_memory_module, check_ai_quota, check_task_limit, update_account_balance, calculate_user_storage)
 -- Triggers: 17 (14 updated_at + 3 auto-population)
 -- RLS Policies: 21
 -- Vistas: 3
@@ -1388,6 +1504,12 @@ END $$;
 -- Primary Keys: INTEGER AUTOINCREMENT (SERIAL)
 -- Gaps resueltos: accounts, password_history, webhook_events
 -- Gap excluido: voice_inputs (audios solo en S3, no en DB)
+--
+-- MODELO DE PLANES:
+-- - Free: Tareas (50/mes) + Contraseñas (10) - SIN módulo Finanzas ni AI Memory
+-- - Basic ($9.99/mes): Tareas (200) + Contraseñas (100) + Módulo Finanzas (1000 trans, 5 budgets, 3 accounts)
+-- - Pro ($14.99/mes): Todo ilimitado + Módulo Finanzas + Módulo AI Memory (20GB)
+-- - Premium ($19.99/mes): Todo ilimitado + Módulo Finanzas + Módulo AI Memory mejorado (100GB)
 --
 -- LISTO PARA PRODUCCIÓN ✅
 -- ============================================================================

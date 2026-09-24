@@ -69,10 +69,14 @@ paths:
         Obtiene todos los planes de suscripción disponibles con características y precios.
 
         **Planes disponibles:**
-        - **Free**: Gratis, funcionalidad limitada
-        - **Basic**: Plan básico mensual
-        - **Pro**: Plan profesional mensual/anual
-        - **Premium**: Plan premium mensual/anual con todas las funciones
+        - **Free** (Gratis): Tareas (50/mes) + Contraseñas (10) - SIN módulo Finanzas ni AI Memory
+        - **Basic** ($9.99/mes): Tareas (200/mes) + Contraseñas (100) + Módulo Finanzas con límites
+        - **Pro** ($14.99/mes): Todo ilimitado + Módulo Finanzas + Módulo AI Memory (20GB)
+        - **Premium** ($19.99/mes): Todo ilimitado + Módulo Finanzas + Módulo AI Memory mejorado (100GB)
+
+        **Acceso a módulos por plan:**
+        - **Módulo Finanzas**: Disponible en Basic, Pro, Premium
+        - **Módulo AI Memory**: Disponible en Pro, Premium
       operationId: listPlans
       produces:
         - application/json
@@ -1321,32 +1325,48 @@ definitions:
         description: "Porcentaje de descuento en plan anual"
       features:
         type: object
+        description: "Límites y acceso a módulos según plan. -1 = ilimitado, 0 = sin acceso"
         properties:
-          max_tasks:
+          tasks:
             type: integer
-            example: 10000
-          max_passwords:
+            example: -1
+            description: "Límite de tareas por mes (-1 = ilimitado)"
+          passwords:
             type: integer
-            example: 1000
-          max_transactions:
+            example: -1
+            description: "Límite de contraseñas almacenadas (-1 = ilimitado)"
+          finance_module:
+            type: boolean
+            example: true
+            description: "¿Tiene acceso al módulo de Finanzas?"
+          transactions:
             type: integer
-            example: 10000
-          ai_quota_monthly:
+            example: -1
+            description: "Límite de transacciones por mes (solo si finance_module=true)"
+          budgets:
+            type: integer
+            example: -1
+            description: "Límite de presupuestos (solo si finance_module=true)"
+          accounts:
+            type: integer
+            example: -1
+            description: "Límite de cuentas bancarias (solo si finance_module=true)"
+          ai_memory_module:
+            type: boolean
+            example: true
+            description: "¿Tiene acceso al módulo de AI Memory?"
+          memories:
+            type: integer
+            example: -1
+            description: "Límite de memorias (solo si ai_memory_module=true)"
+          storage_gb:
+            type: integer
+            example: 20
+            description: "Almacenamiento en GB (solo si ai_memory_module=true)"
+          ai_quota:
             type: integer
             example: 100
             description: "Llamadas a IA por mes"
-          voice_input:
-            type: boolean
-            example: true
-          advanced_reports:
-            type: boolean
-            example: true
-          priority_support:
-            type: boolean
-            example: true
-          custom_categories:
-            type: boolean
-            example: true
       is_popular:
         type: boolean
         example: true
